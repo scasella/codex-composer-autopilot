@@ -1,0 +1,17 @@
+{
+  "name": "scasella-composer-autopilot",
+  "owner": {
+    "name": "scasella"
+  },
+  "plugins": [
+    {
+      "name": "composer-autopilot",
+      "source": "./",
+      "description": "Opt-in Composer predictions for all or selected Claude Code sessions.",
+      "version": "0.3.0"
+    }
+  ],
+  "metadata": {
+    "description": "Native Composer prediction controls for Claude Code."
+  }
+}

@@ -3,6 +3,11 @@ name: composer-autopilot
 description: Enable, stop, inspect, or target the local Composer Autopilot controller for Codex desktop predictions. Use when the user wants predictions automatically sent across all active chats or selected threads, or wants exclusions. Requires macOS and a compatible renderer interface.
 ---
 
+This skill controls Codex desktop only. In Pi or Claude Code, use the native
+`/composer on [here|all|SESSION_ID ...]`, `/composer off`, `/composer off here`,
+`/composer status`, and `/composer sessions` commands documented in the package
+README. Do not start the Codex desktop controller to manage Pi or Claude sessions.
+
 Run the packaged CLI with Node. Resolve `../../bin/autopilot.mjs` relative to this
 SKILL.md's directory; use its absolute path, including when installed in the plugin
 cache. No dependency installation is needed.

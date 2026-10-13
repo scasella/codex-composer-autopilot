@@ -1,0 +1,8 @@
+{
+  "name": "composer-autopilot",
+  "version": "0.3.0",
+  "description": "Opt-in Composer predictions for all or selected Claude Code sessions.",
+  "author": { "name": "scasella" },
+  "repository": "https://github.com/scasella/codex-composer-autopilot",
+  "license": "MIT"
+}

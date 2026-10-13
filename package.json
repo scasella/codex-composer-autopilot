@@ -1,13 +1,45 @@
 {
   "name": "codex-composer-autopilot",
-  "version": "0.2.0",
-  "description": "Opt-in background Composer predictions for selected Codex desktop chats.",
+  "version": "0.3.0",
+  "description": "Opt-in Composer predictions for selected Codex, Pi, and Claude Code sessions.",
   "type": "module",
-  "bin": { "composer-autopilot": "bin/autopilot.mjs" },
-  "scripts": { "test": "node --test test/*.test.mjs" },
-  "engines": { "node": ">=22.4.0" },
+  "bin": {
+    "composer-autopilot": "bin/autopilot.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.4.0"
+  },
   "license": "MIT",
   "author": "scasella",
-  "repository": { "type": "git", "url": "https://github.com/scasella/codex-composer-autopilot.git" },
-  "files": ["bin/", "src/", "skills/", "plugin.json", ".codex-plugin/", "README.md", "LICENSE"]
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/scasella/codex-composer-autopilot.git"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "skills/",
+    "plugin.json",
+    ".codex-plugin/",
+    "README.md",
+    "LICENSE",
+    "integrations/",
+    "hooks/",
+    ".claude-plugin/",
+    "prompts/"
+  ],
+  "pi": {
+    "extensions": [
+      "./integrations/pi.mjs"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "codex",
+    "claude-code",
+    "composer-predictions"
+  ]
 }

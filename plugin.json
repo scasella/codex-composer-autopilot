@@ -1,9 +1,11 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "composer-autopilot",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Opt-in background Composer prediction sending for all or selected local Codex chats.",
-  "author": { "name": "scasella" },
+  "author": {
+    "name": "scasella"
+  },
   "repository": "https://github.com/scasella/codex-composer-autopilot",
   "license": "MIT"
 }
