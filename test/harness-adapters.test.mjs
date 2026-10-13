@@ -11,7 +11,7 @@ const settle=()=>new Promise(r=>setImmediate(r));
 async function piFixture(t) {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'composer-pi-'));
   const old=process.env.COMPOSER_PI_HOME;process.env.COMPOSER_PI_HOME=dir;
-  const hooks=new Map(),sent=[],notes=[],requests=[];let keyHandler,widget,command,source='turn-a',draft='',response='{"suggestion":"Run the tests."}',during;
+  const hooks=new Map(),sent=[],notes=[],requests=[];let keyHandler,widget,command,source='turn-a',draft='',response='{"suggestion":"Run the tests."}',during,usage;
   composer({on:(name,fn)=>hooks.set(name,fn),registerCommand:(_name,opts)=>{command=opts.handler;},sendUserMessage:(text,options)=>sent.push({text,options})});
   if(old===undefined)delete process.env.COMPOSER_PI_HOME;else process.env.COMPOSER_PI_HOME=old;
   t.after(()=>fs.rm(dir,{recursive:true,force:true}));
@@ -20,12 +20,12 @@ async function piFixture(t) {
     modelRegistry:{getAvailable:()=>[{provider:'fixture-provider',id:'fast/model'}],find:(provider,name)=>provider==='fixture-provider'&&name==='fast/model'?{provider,id:name}:undefined,hasConfiguredAuth:()=>true,streamSimple:(model,context,options)=>({result:async()=>{
       requests.push({model,context,options});
       assert.ok(context.messages.at(-1).content[0].text.startsWith(exact));
-      await during?.();return {stopReason:'stop',content:[{type:'text',text:response}]};
+      await during?.();return {usage,stopReason:'stop',content:[{type:'text',text:response}]};
     }})}};
   const event={outcome:'completed',continue:false,context:{pendingMessages:[],llmMessages:[{role:'assistant',content:[{type:'text',text:'Done.'}]}]}};
   const run=()=>hooks.get('agent_before_settle')(event,ctx);
   await hooks.get('session_start')({},ctx);
-  return {dir,hooks,ctx,event,sent,notes,requests,run,source:x=>{source=x;},key:data=>keyHandler?.(data),widget:()=>widget,draft:()=>draft,command:args=>command(args,ctx),response:x=>{response=x;},setDraft:x=>{draft=x;},during:fn=>{during=fn;}};
+  return {dir,hooks,ctx,event,sent,notes,requests,run,source:x=>{source=x;},key:data=>keyHandler?.(data),widget:()=>widget,draft:()=>draft,command:args=>command(args,ctx),usage:x=>{usage=x;},response:x=>{response=x;},setDraft:x=>{draft=x;},during:fn=>{during=fn;}};
 }
 test('Pi native boundary submits exact text without invoking commands or changing draft',async t=>{
   const f=await piFixture(t);await f.command('mode auto');await f.command('on');await f.run();
@@ -131,8 +131,8 @@ test('Pi rejects unknown or unauthenticated choices without replacing settings',
 });
 test('Claude custom Composer model receives visible transcript and exact prompt without forking',async()=>{
   const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('model haiku');await f.command('on');await f.run();
-  assert.equal(f.requests.length,1);assert.equal(f.requests[0].model,'haiku');assert.ok(f.requests[0].prompt.includes('Fix the widget.'));
-  assert.ok(f.requests[0].prompt.includes(exact));assert.deepEqual(f.suggested,['Check the widget.']);assert.deepEqual(f.sent,[]);
+  assert.equal(f.requests.length,1);assert.equal(f.requests[0].model,'haiku');assert.ok(f.requests[0].prompt.map(b=>b.text).join('').includes('Fix the widget.'));
+  assert.ok(f.requests[0].prompt.map(b=>b.text).join('').includes(exact));assert.deepEqual(f.suggested,['Check the widget.']);assert.deepEqual(f.sent,[]);
   await f.command('model session');await f.run({turnId:'turn-b'});assert.equal(f.requests[1].fork,true);
 });
 test('Claude model failure never falls back to the coding model or sends',async()=>{
@@ -187,7 +187,7 @@ test('Pi cycling refuses stale settings and ordinary arrows pass through without
 });
 test('Claude native candidate picker preserves the host UI and previews a selection without sending',async()=>{
   const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('suggestions 3');await f.command('on');f.response('{"suggestions":["Run tests.","Review diff.","Commit changes."]}');await f.run();
-  assert.equal(f.requests.length,1);assert.match(f.requests[0].prompt,/"maxItems":3/);
+  assert.equal(f.requests.length,1);assert.match(typeof f.requests[0].prompt==='string'?f.requests[0].prompt:f.requests[0].prompt.map(b=>b.text).join(''),/"maxItems":3/);
   const tree=await f.emit('ui.render',{component:'AbovePrompt',surface:'terminal'}),picker=tree.props.children[2];
   assert.deepEqual(tree.props.children[0],{});assert.equal(picker.type,'Select');assert.equal(picker.props.options.length,3);
   await picker.props.onSelect('1');assert.deepEqual(f.suggested,['Run tests.','Review diff.']);assert.deepEqual(f.sent,[]);
@@ -203,7 +203,7 @@ test('Claude picker rechecks settings changed by another session before selectin
 
 test('Claude explicit model and effort send the multi-candidate schema through complete',async()=>{
   const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('suggestions 2');await f.command('model haiku');await f.command('effort low');await f.command('on');f.response('{"suggestions":["Run tests.","Review diff."]}');await f.run();
-  assert.equal(f.requests.length,1);assert.equal(f.requests[0].model,'haiku');assert.equal(f.requests[0].effort,'low');assert.match(f.requests[0].prompt,/"maxItems":2/);assert.deepEqual(f.suggested,['Run tests.']);
+  assert.equal(f.requests.length,1);assert.equal(f.requests[0].model,'haiku');assert.equal(f.requests[0].effort,'low');assert.match(typeof f.requests[0].prompt==='string'?f.requests[0].prompt:f.requests[0].prompt.map(b=>b.text).join(''),/"maxItems":2/);assert.deepEqual(f.suggested,['Run tests.']);
   for(const props of [{hasSurvey:true},{isWorking:true},{view:{agentId:'subagent'}}])assert.deepEqual(await f.emit('ui.render',{component:'AbovePrompt',surface:'terminal',props}),{});
   assert.deepEqual(f.sent,[]);
 });
@@ -216,5 +216,20 @@ test('Claude persists actionable API diagnostics for completion and fork without
     f.$.model.complete=failure;f.$.model.fork=failure;await f.run();
     assert.match(f.logs.at(-1),/HTTP 400, invalid_request/);assert.deepEqual(f.suggested,[]);assert.deepEqual(f.sent,[]);
     await f.command('status');assert.match(f.logs.at(-1),/^PAUSED/);assert.match(f.logs.at(-1),/HTTP 400/);
+  }
+});
+
+
+test('Pi wires history caching and persists native cache usage in status',async t=>{
+  const f=await piFixture(t);await f.command('on');f.usage({cacheRead:2048,cacheWrite:512});await f.run();
+  assert.equal(typeof f.requests[0].options.onPayload,'function');assert.equal(f.requests[0].options.sessionId,'composer-'+id);
+  assert.equal(f.requests[0].options.cacheRetention,undefined);await f.command('status');assert.match(f.notes.at(-1),/Cache \(last prediction\): hit; read 2048, wrote 512 tokens/);
+});
+test('Claude complete and fork cache usage survives through status; missing usage is unknown',async()=>{
+  for(const model of ['haiku','session']){
+    const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('model '+model);await f.command('on');
+    const response=async()=>({isAnswered:true,text:'{"suggestion":null}',usage:{cache_read_input_tokens:4096,cache_creation_input_tokens:256}});
+    f.$.model.complete=response;f.$.model.fork=response;await f.run();await f.command('status');assert.match(f.logs.at(-1),/hit; read 4096, wrote 256 tokens/);
+    f.$.model.complete=f.$.model.fork=async()=>({isAnswered:true,text:'{"suggestion":null}'});await f.run({turnId:'next'});await f.command('status');assert.match(f.logs.at(-1),/unavailable \(provider did not report cache usage\)/);
   }
 });

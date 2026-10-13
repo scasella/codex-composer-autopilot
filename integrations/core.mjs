@@ -1,3 +1,5 @@
+import { cacheUsage, cacheStatus } from './cache.mjs';
+
 // Shared, dependency-free policy. Host adapters own context, storage, and submission.
 export const HELP = 'composer on [here|all|SESSION_ID ...] | off [here|SESSION_ID ...] | status | sessions | mode suggest|auto | model [session|MODEL] | models | effort [default|low|medium|high|xhigh|max] | suggestions [N] | limit N';
 export const defaults = () => ({ version: 5, enabled: false, mode: 'selected', delivery: 'suggest', predictionModel: 'session', predictionEffort: 'default', suggestionCount: 1, sessions: [], exclude: [], limit: 10, revision: 'initial' });
@@ -78,7 +80,7 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
     if (action === 'status' || (['model', 'effort', 'suggestions'].includes(action) && !targets.length)) {
       const state = await read(id);
       const paused = state.revision === c.revision && (state.status === 'halted' || (c.delivery === 'auto' && state.count >= c.limit));
-      return `${!targeted(c, id) ? 'OFF' : paused ? 'PAUSED' : 'ON'} for ${id}\nDelivery: ${c.delivery === 'suggest' ? 'suggest — Tab to accept, Enter to send' : 'auto — send automatically'}\nComposer model: ${c.predictionModel === 'session' ? 'session (coding model)' : c.predictionModel}\nComposer effort: ${c.predictionEffort}\nSuggestions: ${c.suggestionCount} (auto mode always uses one)\nScope: ${c.mode === 'all' ? 'all loaded sessions' : c.sessions.join(', ') || 'none'}\nExcluded: ${c.exclude.join(', ') || 'none'}\nLimit: ${c.limit} automatic follow-ups per session between user messages.\nLast: ${state.status}${state.error ? ' — ' + state.error : ''}`;
+      return `${!targeted(c, id) ? 'OFF' : paused ? 'PAUSED' : 'ON'} for ${id}\nDelivery: ${c.delivery === 'suggest' ? 'suggest — Tab to accept, Enter to send' : 'auto — send automatically'}\nComposer model: ${c.predictionModel === 'session' ? 'session (coding model)' : c.predictionModel}\nComposer effort: ${c.predictionEffort}\nSuggestions: ${c.suggestionCount} (auto mode always uses one)\nScope: ${c.mode === 'all' ? 'all loaded sessions' : c.sessions.join(', ') || 'none'}\nExcluded: ${c.exclude.join(', ') || 'none'}\nLimit: ${c.limit} automatic follow-ups per session between user messages.\nCache (last prediction): ${cacheStatus(state.cache)}\nLast: ${state.status}${state.error ? ' — ' + state.error : ''}`;
     }
     const ids = targets.map(x => x === 'here' ? id : x);
     if (action === 'on') {
@@ -114,11 +116,11 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
       state = await read(id);
       if (state.revision !== revision) state = { ...state, revision, count: 0, error: undefined, status: 'idle' };
       if (state.source === source || state.status === 'halted' || (c.delivery === 'auto' && state.count >= c.limit)) return;
-      state = { ...state, id, source, cwd, status: 'predicting', updatedAt: Date.now() };
+      state = { ...state, id, source, cwd, status: 'predicting', cache: null, updatedAt: Date.now() };
       // Reserve before the model call; reloads and ambiguous submissions never replay this source.
       await store.set(recordKey(id), state);
       const count = c.delivery === 'suggest' ? c.suggestionCount : 1;
-      const raw = await predict(c.predictionModel, c.predictionEffort, count);
+      const raw = await predict(c.predictionModel, c.predictionEffort, count, usage => { state.cache = cacheUsage(usage); });
       if (raw === null) throw Error('Prediction model did not answer. Run composer on to retry on a future turn.');
       const candidates = parseSuggestions(raw, count), text = candidates[0];
       const latest = await config();

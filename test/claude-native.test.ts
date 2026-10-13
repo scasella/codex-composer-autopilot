@@ -20,7 +20,8 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   on('session.messages', async () => ({ value: [{role:'user',text:'Fix the fixture.',toolUses:[]},{role:'assistant',text:'Fixed.',toolUses:[]}] }));
   on('model.complete', async (_$, e) => {
     completions.push(e);expect(e.model).toBe(expectedModel);expect(e.effort).toBe(expectedEffort);expect(e.prompt).toMatch('Fix the fixture.');expect(e.prompt).toMatch('EXACT_TEST_PROMPT');
-    return { value: { isAnswered: true, text: '{\"suggestion\":\"Check the fixture.\"}' } };
+    expect(e.promptBlocks.filter(b=>b.cache).length).toBe(3);expect(e.promptBlocks.at(-1).cache).toBeUndefined();
+    return { value: { isAnswered: true, usage: {cache_read_input_tokens: 2048, cache_creation_input_tokens: 128}, text: '{\"suggestion\":\"Check the fixture.\"}' } };
   });
   on('session.cwd', async () => ({ value: '/project' }));
   on('command.register', async () => ({ value: undefined }));
@@ -50,6 +51,8 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   await clock.advance(200);
   expect(suggested).toEqual(['Run the tests.','Check the fixture.']);
   expect(sent).toEqual(['Run the tests.']);
+  await $.command.run({ command: 'composer', args: 'status', origin: { kind: 'composer' } });
+  expect(logs.at(-1)).toMatch('hit; read 2048, wrote 128 tokens');
   expectedModel = 'coding-model';expectedEffort = 'low';
   await $.command.run({ command: 'composer', args: 'model session', origin: { kind: 'composer' } });
   await $.command.run({ command: 'composer', args: 'effort low', origin: { kind: 'composer' } });

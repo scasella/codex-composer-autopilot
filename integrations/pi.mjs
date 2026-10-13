@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { createController, predictionRequest, modelName, HELP } from './core.mjs';
+import { cachePiHistory } from './cache.mjs';
 import { nodeStore } from './node-store.mjs';
 
 function predictionModel(ctx, choice) {
@@ -90,14 +91,15 @@ export default function composer(pi) {
       !ctx.hasPendingMessages() && !ctx.ui.getEditorText().trim();
     try {
       await control.run({ id: session, source, cwd: ctx.cwd, current, supportsSuggestions: Boolean(ctx.hasUI && unsubscribe),
-        async predict(choice, effort, count) {
+        async predict(choice, effort, count, reportUsage) {
           const model = predictionModel(ctx, choice);
           const exact = await fs.readFile(new URL('../prompts/composer-v5.txt', import.meta.url), 'utf8');
           const stream = ctx.modelRegistry.streamSimple(model, {
             systemPrompt: ctx.getSystemPrompt(), messages: [...event.context.llmMessages,
               { role: 'user', content: [{ type: 'text', text: predictionRequest(exact, count) }], timestamp: Date.now() }]
-          }, { reasoning: effort === 'default' ? 'high' : effort, maxTokens: 4096, signal, sessionId: `composer-${session}` });
+          }, { reasoning: effort === 'default' ? 'high' : effort, maxTokens: 4096, signal, sessionId: `composer-${session}`, onPayload: cachePiHistory });
           const result = await stream.result();
+          reportUsage({ read: result.usage?.cacheRead, write: result.usage?.cacheWrite });
           if (['error', 'aborted'].includes(result.stopReason)) return null;
           return result.content.filter(x => x.type === 'text').map(x => x.text).join('');
         },

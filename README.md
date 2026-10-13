@@ -210,6 +210,42 @@ Supported effort depends on the chosen model and provider. Pi uses its provider'
 normal reasoning mapping; Claude drops effort for models without effort support.
 A model error pauses predictions without silently switching models or effort.
 
+### Prompt caching and usage
+
+Caching is automatic; there is no new Composer setting. `/composer status` shows
+provider-reported usage for this session's **last prediction request**, for example:
+
+```text
+Cache (last prediction): hit; read 4096, wrote 256 tokens
+```
+
+A hit means the provider reported cache reads greater than zero. Zero reads show
+`no hit reported`; missing usage shows `unavailable`, not a guessed zero. Counters
+survive restarts and include requests whose suggestions were later discarded.
+They describe the last request, not lifetime totals or a guaranteed cost saving.
+Only token counts are persisted, never cached prompt content or response text.
+
+**Claude:** the custom-model/effort path uses native text blocks with cache
+breakpoints on the stable header and recent history, followed by uncached window
+metadata and prediction instructions. Appending turns preserves earlier text
+prefixes; changing the requested number of suggestions affects only the tail.
+The context remains bounded to 80 recent entries plus the initial intent. When
+that window moves or context is compacted, the changed prefix needs a new cache
+write. The native fork retains its own caching and reports the same usage fields.
+Block caching requires Claude Code 2.1.292 or later (validated on 2.1.296).
+
+**Pi:** the extension retains native provider caching and its stable Composer
+session key. For Anthropic Messages, it moves the provider's existing final cache
+marker from prediction instructions onto the preceding reusable conversation
+history. It preserves retention/TTL and does nothing when that marker is absent,
+so provider cache opt-outs are respected. Other APIs keep their native payloads.
+Both cache-read and cache-write token counts use Pi's normalized provider usage.
+
+Actual cache hits depend on provider support, minimum prefix length, matching
+model/context and cache expiry. Short conversations may not qualify; a different
+Composer model does not share the coding model's cache. No extra model calls,
+local prompt cache, dependencies, or automatic retries are added.
+
 ### Claude prediction API errors
 
 If Composer pauses with `api-error`, `/composer status` preserves the API's HTTP

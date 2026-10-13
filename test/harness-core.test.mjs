@@ -188,3 +188,20 @@ test('changing suggestion count during generation discards the whole batch',asyn
   await f.run(f.a,{predict:async()=>{await f.b.command('suggestions 2',other,'/b');return '{"suggestions":["Run tests.","Review diff."]}';},suggest:async()=>assert.fail('stale batch')});
   assert.equal(f.values.get('session-'+id).status,'cancelled');assert.deepEqual(f.sent,[]);
 });
+
+test('cache status persists across controller reloads without storing model response text',async()=>{
+  const f=fixture();await f.a.command('on all',id,'/a');
+  await f.run(f.a,{predict:async(_model,_effort,_count,usage)=>{usage({read:2048,write:512});return '{"suggestion":"PRIVATE CANDIDATE"}';},suggest:async()=>true});
+  assert.match(await f.b.command('status',id,'/a'),/hit; read 2048, wrote 512 tokens/);
+  assert.ok(!JSON.stringify([...f.values]).includes('PRIVATE CANDIDATE'));
+  await f.run(f.b,{predict:async()=>'{"suggestion":null}'});
+  assert.match(await f.a.command('status',id,'/a'),/unavailable/);
+});
+test('cache usage is retained for discarded or invalid predictions without enabling delivery',async()=>{
+  const f=fixture();await f.a.command('on all',id,'/a');
+  await f.run(f.a,{predict:async(_m,_e,_n,usage)=>{usage({read:4096,write:0});await f.b.command('off',other,'/b');return '{"suggestion":"Continue."}';},suggest:async()=>assert.fail('stale')});
+  assert.match(await f.a.command('status',id,'/a'),/hit; read 4096, wrote 0 tokens/);assert.deepEqual(f.sent,[]);
+  await f.a.command('on all',id,'/a');
+  await assert.rejects(f.run(f.a,{predict:async(_m,_e,_n,usage)=>{usage({read:0,write:100});return 'bad json';}}));
+  assert.match(await f.b.command('status',id,'/a'),/no hit reported; read 0, wrote 100 tokens/);
+});
