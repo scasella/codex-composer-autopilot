@@ -96,7 +96,7 @@ test('legacy configs without a delivery choice default to suggestions; invalid m
 
 test('changing delivery upgrades config so older auto-only plugins refuse it',async()=>{
   const f=fixture();await f.a.command('mode suggest',id,'/a');
-  const c=await f.store.get('config');assert.equal(c.version,2);delete c.delivery;await f.store.set('config',c);
+  const c=await f.store.get('config');assert.equal(c.version,3);delete c.delivery;await f.store.set('config',c);
   await assert.rejects(f.run(),/delivery/);
 });
 
@@ -107,4 +107,24 @@ test('default suggestions survive enabling and reload; explicit auto choice pers
   assert.equal(suggested,1);assert.deepEqual(f.sent,[]);
   await f.a.command('mode auto',id,'/a');await f.run(f.b);assert.equal(f.sent.length,1);
   assert.match(await f.b.command('status',id,'/a'),/Delivery: auto/);
+});
+
+test('Composer model is persisted without enabling or changing scope or delivery',async()=>{
+  const f=fixture();await f.a.command('model haiku',id,'/a');
+  let c=await f.store.get('config');assert.equal(c.enabled,false);assert.equal(c.delivery,'suggest');assert.deepEqual(c.sessions,[]);
+  await f.a.command('on all',id,'/a');let selected;
+  await f.run(f.b,{predict:async model=>{selected=model;return '{"suggestion":null}';}});assert.equal(selected,'haiku');
+  assert.match(await f.b.command('model',other,'/b'),/Composer model: haiku/);
+  await f.b.command('model session',other,'/b');c=await f.store.get('config');assert.equal(c.mode,'all');assert.equal(c.predictionModel,'session');
+});
+test('changing model during generation cancels the old result',async()=>{
+  const f=fixture();await f.a.command('on all',id,'/a');let suggested=false;
+  await f.run(f.a,{predict:async()=>{await f.b.command('model sonnet',other,'/b');return '{"suggestion":"Continue."}';},suggest:async()=>{suggested=true;}});
+  assert.equal(suggested,false);assert.deepEqual(f.sent,[]);
+});
+test('old configs use the session model; missing or malformed new model settings fail closed',async()=>{
+  const f=fixture();await f.a.command('on all',id,'/a');const c=await f.store.get('config');c.version=2;delete c.predictionModel;await f.store.set('config',c);
+  await f.run(f.a,{predict:async model=>{assert.equal(model,'session');return '{"suggestion":null}';}});
+  await f.store.set('config',{...c,version:3});await assert.rejects(f.run(),/model ID/);
+  await f.store.set('config',{...c,version:3,predictionModel:'bad model'});await assert.rejects(f.run(),/model ID/);
 });

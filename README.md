@@ -22,7 +22,8 @@ Start a new Pi session, or run `/reload` in an existing session, then:
 /composer off
 ```
 
-The native extension uses your current model and credentials. Tested with Pi
+The native extension defaults to your coding model and supports a separate
+Composer model through your configured providers and credentials. Tested with Pi
 1.1.0 (`@earendil-works/pi-coding-agent`) and Node 25; the package requires Node
 22.4+. It needs Pi's `agent_before_settle` and model-registry streaming APIs.
 
@@ -51,6 +52,10 @@ releases with only shell hooks cannot run this integration.
 | `/composer sessions` | List sessions that have registered, including previously closed sessions |
 | `/composer mode suggest` | Show a suggestion for Tab to accept; never send it automatically |
 | `/composer mode auto` | Explicitly opt into automatic sending |
+| `/composer models` | List Pi models with configured credentials, or Claude aliases and ID guidance |
+| `/composer model MODEL` | Choose a separate model for predictions |
+| `/composer model session` | Follow the current coding model (default) |
+| `/composer model` | Show the saved Composer model and status |
 | `/composer limit 10` | Set the maximum automatic follow-ups per session between human messages |
 
 Suggestion mode is the default. Choose your target scope:
@@ -80,8 +85,8 @@ work. A native Claude suggestion already displayed may remain until the next edi
 or turn, but accepting it still requires your action and never sends it itself.
 
 **Upgrade:** update/reload every loaded instance before using the new setting.
-The first settings change writes config version 2, which older auto-only plugins
-reject rather than continuing automatic sending. Pi: `pi update git:github.com/scasella/codex-composer-autopilot` then `/reload`.
+The first settings change writes config version 3, which older plugins reject
+rather than ignoring the selected delivery mode or Composer model. Pi: `pi update git:github.com/scasella/codex-composer-autopilot` then `/reload`.
 Claude Code: `claude plugin marketplace update scasella-composer-autopilot`,
 `claude plugin update composer-autopilot@scasella-composer-autopilot`, then start a
 new session. This update does not change Codex desktop behavior.
@@ -100,6 +105,45 @@ given session ID. State lives in `~/.pi/agent/composer-autopilot` and
 text. A submission marked `submitted` means the native host accepted it, not that
 the resulting coding task succeeded.
 
+### Choose a Composer model
+
+```text
+/composer models
+/composer model haiku
+```
+
+The example above selects Claude's `haiku` alias. Claude also accepts `sonnet`,
+`opus`, and full model IDs that its configured provider and policy allow. This
+list is guidance, not an account-specific availability check; the native model
+API validates the choice when generating a prediction.
+
+In Pi, use a full **provider/model-id** from `/composer models`:
+
+```text
+/composer model PROVIDER/MODEL_ID
+```
+
+Pi checks the model registry and configured credentials before saving a choice.
+Model IDs containing further slashes are supported. Each prediction uses the
+selected provider's normal authentication. A different provider receives the
+conversation context used to generate the prediction.
+
+`/composer model session` restores the default of following the coding model.
+This setting is shared across targeted sessions within one harness, independent
+of the other harness. It persists across restarts and does not change the coding
+model, target selection, enabled state, or delivery mode. Changing it discards
+pending predictions. If a selected model fails, Composer pauses without falling
+back to another model; select a working model to resume on a future turn.
+
+**Claude context:** `session` uses the native conversation fork. The fork API
+cannot select a different model, so an explicit model uses `model.complete` with
+up to 80 recent visible transcript entries, bounded text/tool output, and the
+initial user request. It includes the exact Composer prompt unchanged. It does
+not receive images, hidden system instructions, or project instructions that are
+absent from the visible transcript. Predictions may therefore differ from the
+native fork even if the chosen model is the same. This uses the documented
+[Claude model APIs](https://code.claude.com/docs/en/plugins/mods/api).
+
 ### Prompt and behavior
 
 Both integrations use the byte-exact **Composer prompt version 5** retrieved from
@@ -109,8 +153,9 @@ Codex's prediction configuration on October 13, 2026, saved in
 A JSON output constraint is appended separately; the original prompt is unchanged.
 
 Pi sends a separate prediction request with the current conversation and system
-prompt, requesting high reasoning. Claude uses its native conversation fork with
-the host's model settings. These reuse the prompt, not Codex's private prediction
+prompt to the chosen model, requesting high reasoning. Claude uses its native
+conversation fork by default, or the bounded transcript path described above when
+you explicitly select a model. These reuse the prompt, not Codex's private prediction
 mode or model, so prediction quality and wording can differ. The saved prompt
 assumes manual review; enabling Autopilot explicitly opts into automatic sending.
 Prediction calls and subsequent turns consume your normal model quota.

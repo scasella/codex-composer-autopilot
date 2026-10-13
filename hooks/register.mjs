@@ -14,6 +14,7 @@ async function makeControl($) {
   }
 
 import { createController, predictionRequest, HELP } from '../integrations/core.mjs';
+import { transcriptRequest, completionText } from '../integrations/claude-context.mjs';
 
 export function register(on) {
   let control, epoch = 0, running = null, queued = 0, lastTurn = null, timer, interactive = false;
@@ -21,11 +22,15 @@ export function register(on) {
   on('session.start', async ($, e, next) => {
     cancel(); interactive = e.isInteractive === true;
     await ((control ??= await makeControl($))).register(await $.session.id(), await $.session.cwd());
-    await $.command.register({ name: 'composer', description: HELP, argumentHint: 'on|off|mode suggest|auto|status|sessions', immediate: true });
+    await $.command.register({ name: 'composer', description: HELP, argumentHint: 'on|off|mode|model|models|status|sessions', immediate: true });
     return next(e);
   });
   on('command.run', { command: 'composer' }, async ($, e) => {
     cancel();
+    if (e.args.trim() === 'models') {
+      await $.ui.log('session (coding model)\nhaiku\nsonnet\nopus\nOr a full Claude model ID supported by your provider. Availability is checked by Claude when predicting.');
+      return {};
+    }
     try { await $.ui.log(await ((control ??= await makeControl($))).command(e.args, await $.session.id(), await $.session.cwd())); }
     catch (error) { await $.ui.log(`Composer: ${String(error)}`); }
     return {};
@@ -54,8 +59,12 @@ export function register(on) {
         const current = async () => generation === epoch && !running && !queued && lastTurn === e.turnId &&
           await $.session.id() === id && !(await $.prompt.read()).text.trim();
         await ((control ??= await makeControl($))).run({ id, source: e.turnId, cwd, current, supportsSuggestions: interactive,
-          async predict() {
+          async predict(choice) {
             const exact = await $.fs.read(`${$.plugin.root}/prompts/composer-v5.txt`);
+            if (choice !== 'session') {
+              const prompt = transcriptRequest(exact, await $.session.messages());
+              return completionText(await $.model.complete({ model: choice, prompt, maxTokens: 4096, timeoutMs: 45000 }));
+            }
             const response = await $.model.fork({ prompt: predictionRequest(exact) });
             return response?.text ?? null;
           },

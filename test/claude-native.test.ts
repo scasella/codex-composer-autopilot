@@ -13,6 +13,11 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   on('fs.read', async (_$, e) => ({ value: e.path.endsWith('composer-v5.txt') ? 'EXACT_TEST_PROMPT' : files.get(e.path) }));
   on('fs.write', async (_$, e) => { files.set(e.path,e.text); return { value: undefined }; });
   on('session.id', async () => ({ value: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }));
+  on('session.messages', async () => ({ value: [{role:'user',text:'Fix the fixture.',toolUses:[]},{role:'assistant',text:'Fixed.',toolUses:[]}] }));
+  on('model.complete', async (_$, e) => {
+    expect(e.model).toBe('haiku');expect(e.prompt).toMatch('Fix the fixture.');expect(e.prompt).toMatch('EXACT_TEST_PROMPT');
+    return { value: { isAnswered: true, text: '{\"suggestion\":\"Check the fixture.\"}' } };
+  });
   on('session.cwd', async () => ({ value: '/project' }));
   on('command.register', async () => ({ value: undefined }));
   on('ui.log', async (_$, e) => { logs.push(e.text); return { value: undefined }; });
@@ -34,6 +39,12 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   await $.turn.complete({ turnId: 'turn-suggest', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
   await clock.advance(200);
   expect(suggested).toEqual(['Run the tests.']);
+  expect(sent).toEqual(['Run the tests.']);
+  await $.command.run({ command: 'composer', args: 'mode suggest', origin: { kind: 'composer' } });
+  await $.command.run({ command: 'composer', args: 'model haiku', origin: { kind: 'composer' } });
+  await $.turn.complete({ turnId: 'turn-custom', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
+  await clock.advance(200);
+  expect(suggested).toEqual(['Run the tests.','Check the fixture.']);
   expect(sent).toEqual(['Run the tests.']);
   await $.command.run({ command: 'composer', args: 'off', origin: { kind: 'composer' } });
   await $.turn.complete({ turnId: 'turn-b', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });

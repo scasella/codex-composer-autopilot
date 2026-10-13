@@ -1,6 +1,17 @@
 import fs from 'node:fs/promises';
-import { createController, predictionRequest, HELP } from './core.mjs';
+import { createController, predictionRequest, modelName, HELP } from './core.mjs';
 import { nodeStore } from './node-store.mjs';
+
+function predictionModel(ctx, choice) {
+  if (choice === 'session') return ctx.model;
+  modelName(choice);
+  const slash = choice.indexOf('/');
+  if (slash < 1) throw Error('Pi needs provider/model-id. Run /composer models to list choices.');
+  const model = ctx.modelRegistry.find(choice.slice(0, slash), choice.slice(slash + 1));
+  if (!model) throw Error(`Unknown Composer model: ${choice}. Run /composer models.`);
+  if (!ctx.modelRegistry.hasConfiguredAuth(model)) throw Error(`No configured credentials for Composer model: ${choice}.`);
+  return model;
+}
 
 export default function composer(pi) {
   const control = createController(nodeStore());
@@ -13,7 +24,16 @@ export default function composer(pi) {
     description: HELP,
     handler: async (args, ctx) => {
       cancel();
-      try { ctx.ui.notify(await control.command(args, id(ctx), ctx.cwd), 'info'); }
+      try {
+        const parts = args.trim().split(/\s+/);
+        if (parts[0] === 'models' && parts.length === 1) {
+          const models = ctx.modelRegistry.getAvailable().map(m => `${m.provider}/${m.id}`).sort();
+          ctx.ui.notify(['session (coding model)', ...models].join('\n'), 'info');
+          return;
+        }
+        if (parts[0] === 'model' && parts.length === 2) predictionModel(ctx, parts[1]);
+        ctx.ui.notify(await control.command(args, id(ctx), ctx.cwd), 'info');
+      }
       catch (e) { report(ctx, e); }
     }
   });
@@ -57,9 +77,10 @@ export default function composer(pi) {
       !ctx.hasPendingMessages() && !ctx.ui.getEditorText().trim();
     try {
       await control.run({ id: session, source, cwd: ctx.cwd, current, supportsSuggestions: Boolean(ctx.hasUI && unsubscribe),
-        async predict() {
+        async predict(choice) {
+          const model = predictionModel(ctx, choice);
           const exact = await fs.readFile(new URL('../prompts/composer-v5.txt', import.meta.url), 'utf8');
-          const stream = ctx.modelRegistry.streamSimple(ctx.model, {
+          const stream = ctx.modelRegistry.streamSimple(model, {
             systemPrompt: ctx.getSystemPrompt(), messages: [...event.context.llmMessages,
               { role: 'user', content: [{ type: 'text', text: predictionRequest(exact) }], timestamp: Date.now() }]
           }, { reasoning: 'high', maxTokens: 4096, signal, sessionId: `composer-${session}` });
