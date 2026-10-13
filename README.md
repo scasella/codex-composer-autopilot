@@ -56,6 +56,8 @@ releases with only shell hooks cannot run this integration.
 | `/composer model MODEL` | Choose a separate model for predictions |
 | `/composer model session` | Follow the current coding model (default) |
 | `/composer model` | Show the saved Composer model and status |
+| `/composer effort LEVEL` | Set prediction effort: `low`, `medium`, `high`, `xhigh`, or `max`; `default` resets it |
+| `/composer effort` | Show the saved Composer effort and status |
 | `/composer limit 10` | Set the maximum automatic follow-ups per session between human messages |
 
 Suggestion mode is the default. Choose your target scope:
@@ -85,8 +87,8 @@ work. A native Claude suggestion already displayed may remain until the next edi
 or turn, but accepting it still requires your action and never sends it itself.
 
 **Upgrade:** update/reload every loaded instance before using the new setting.
-The first settings change writes config version 3, which older plugins reject
-rather than ignoring the selected delivery mode or Composer model. Pi: `pi update git:github.com/scasella/codex-composer-autopilot` then `/reload`.
+The first settings change writes config version 4, which older plugins reject
+rather than ignoring the selected delivery mode, Composer model, or effort. Pi: `pi update git:github.com/scasella/codex-composer-autopilot` then `/reload`.
 Claude Code: `claude plugin marketplace update scasella-composer-autopilot`,
 `claude plugin update composer-autopilot@scasella-composer-autopilot`, then start a
 new session. This update does not change Codex desktop behavior.
@@ -135,14 +137,40 @@ model, target selection, enabled state, or delivery mode. Changing it discards
 pending predictions. If a selected model fails, Composer pauses without falling
 back to another model; select a working model to resume on a future turn.
 
-**Claude context:** `session` uses the native conversation fork. The fork API
-cannot select a different model, so an explicit model uses `model.complete` with
+**Claude context:** `session` with `default` effort uses the native conversation
+fork. The fork API cannot override model or effort, so an explicit model or
+effort uses `model.complete` with
 up to 80 recent visible transcript entries, bounded text/tool output, and the
 initial user request. It includes the exact Composer prompt unchanged. It does
 not receive images, hidden system instructions, or project instructions that are
 absent from the visible transcript. Predictions may therefore differ from the
 native fork even if the chosen model is the same. This uses the documented
 [Claude model APIs](https://code.claude.com/docs/en/plugins/mods/api).
+
+### Choose Composer reasoning effort
+
+```text
+/composer effort low
+/composer effort
+/composer effort default
+```
+
+Choose `low`, `medium`, `high`, `xhigh`, or `max`. An explicit choice applies only
+to Composer prediction requests, independently of the coding session's effort.
+It persists across restarts and applies to targeted sessions within this harness;
+it does not change the Composer model, targets, enabled state, or delivery mode.
+Changing effort discards pending predictions and invalidates retained Pi previews.
+A native Claude preview already displayed may remain until the next edit or turn.
+
+`default` preserves the previous behavior: Pi requests **high** reasoning; Claude
+uses the native fork when following the coding model, or the selected model's
+own default for a separate completion. To request a specific effort independently
+in Claude, set an explicit level; this uses the bounded transcript path described
+above, including when `/composer model session` is selected.
+
+Supported effort depends on the chosen model and provider. Pi uses its provider's
+normal reasoning mapping; Claude drops effort for models without effort support.
+A model error pauses predictions without silently switching models or effort.
 
 ### Prompt and behavior
 
@@ -153,9 +181,9 @@ Codex's prediction configuration on October 13, 2026, saved in
 A JSON output constraint is appended separately; the original prompt is unchanged.
 
 Pi sends a separate prediction request with the current conversation and system
-prompt to the chosen model, requesting high reasoning. Claude uses its native
-conversation fork by default, or the bounded transcript path described above when
-you explicitly select a model. These reuse the prompt, not Codex's private prediction
+prompt to the chosen model, requesting the saved effort (high by default). Claude
+uses its native conversation fork by default, or the bounded transcript path
+described above when you explicitly select a model or effort. These reuse the prompt, not Codex's private prediction
 mode or model, so prediction quality and wording can differ. The saved prompt
 assumes manual review; enabling Autopilot explicitly opts into automatic sending.
 Prediction calls and subsequent turns consume your normal model quota.

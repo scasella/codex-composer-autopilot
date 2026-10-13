@@ -22,7 +22,7 @@ export function register(on) {
   on('session.start', async ($, e, next) => {
     cancel(); interactive = e.isInteractive === true;
     await ((control ??= await makeControl($))).register(await $.session.id(), await $.session.cwd());
-    await $.command.register({ name: 'composer', description: HELP, argumentHint: 'on|off|mode|model|models|status|sessions', immediate: true });
+    await $.command.register({ name: 'composer', description: HELP, argumentHint: 'on|off|mode|model|models|effort|status|sessions', immediate: true });
     return next(e);
   });
   on('command.run', { command: 'composer' }, async ($, e) => {
@@ -59,11 +59,13 @@ export function register(on) {
         const current = async () => generation === epoch && !running && !queued && lastTurn === e.turnId &&
           await $.session.id() === id && !(await $.prompt.read()).text.trim();
         await ((control ??= await makeControl($))).run({ id, source: e.turnId, cwd, current, supportsSuggestions: interactive,
-          async predict(choice) {
+          async predict(choice, effort) {
             const exact = await $.fs.read(`${$.plugin.root}/prompts/composer-v5.txt`);
-            if (choice !== 'session') {
+            if (choice !== 'session' || effort !== 'default') {
+              const model = choice === 'session' ? await $.session.model() : choice;
+              if (typeof model !== 'string' || !model.trim()) throw Error('Unable to resolve the Composer model.');
               const prompt = transcriptRequest(exact, await $.session.messages());
-              return completionText(await $.model.complete({ model: choice, prompt, maxTokens: 4096, timeoutMs: 45000 }));
+              return completionText(await $.model.complete({ model, prompt, maxTokens: 4096, timeoutMs: 45000, ...(effort === 'default' ? {} : { effort }) }));
             }
             const response = await $.model.fork({ prompt: predictionRequest(exact) });
             return response?.text ?? null;

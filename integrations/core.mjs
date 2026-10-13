@@ -1,20 +1,25 @@
 // Shared, dependency-free policy. Host adapters own context, storage, and submission.
-export const HELP = 'composer on [here|all|SESSION_ID ...] | off [here|SESSION_ID ...] | status | sessions | mode suggest|auto | model [session|MODEL] | models | limit N';
-export const defaults = () => ({ version: 3, enabled: false, mode: 'selected', delivery: 'suggest', predictionModel: 'session', sessions: [], exclude: [], limit: 10, revision: 'initial' });
+export const HELP = 'composer on [here|all|SESSION_ID ...] | off [here|SESSION_ID ...] | status | sessions | mode suggest|auto | model [session|MODEL] | models | effort [default|low|medium|high|xhigh|max] | limit N';
+export const defaults = () => ({ version: 4, enabled: false, mode: 'selected', delivery: 'suggest', predictionModel: 'session', predictionEffort: 'default', sessions: [], exclude: [], limit: 10, revision: 'initial' });
 export function sessionId(id) {
   if (typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/.test(id)) throw Error('Use a complete session ID from composer sessions.');
   return id;
 }
 export function validateConfig(c) {
-  if (!c || ![1, 2, 3].includes(c.version) || typeof c.enabled !== 'boolean' || !['selected', 'all'].includes(c.mode) ||
+  if (!c || ![1, 2, 3, 4].includes(c.version) || typeof c.enabled !== 'boolean' || !['selected', 'all'].includes(c.mode) ||
     !Array.isArray(c.sessions) || !Array.isArray(c.exclude) || typeof c.revision !== 'string' ||
     !Number.isInteger(c.limit) || c.limit < 1 || c.limit > 1000) throw Error('Invalid Composer settings; restore a valid config before enabling.');
   if ((c.version >= 2 || c.delivery !== undefined) && !['auto', 'suggest'].includes(c.delivery)) throw Error('Invalid Composer delivery mode.');
   if (c.version >= 3 || c.predictionModel !== undefined) modelName(c.predictionModel);
-  c.sessions.forEach(sessionId); c.exclude.forEach(sessionId); return { ...c, version: 3, delivery: c.delivery ?? 'suggest', predictionModel: c.predictionModel ?? 'session' };
+  if (c.version >= 4 || c.predictionEffort !== undefined) effortName(c.predictionEffort);
+  c.sessions.forEach(sessionId); c.exclude.forEach(sessionId); return { ...c, version: 4, delivery: c.delivery ?? 'suggest', predictionModel: c.predictionModel ?? 'session', predictionEffort: c.predictionEffort ?? 'default' };
 }
 export function modelName(value) {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._/:@+\-]{0,255}$/.test(value)) throw Error('Use composer model session or a model ID from composer models.');
+  return value;
+}
+function effortName(value) {
+  if (!['default', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value)) throw Error('Use composer effort default|low|medium|high|xhigh|max.');
   return value;
 }
 export const targeted = (c, id) => c.enabled && !c.exclude.includes(id) && (c.mode === 'all' || c.sessions.includes(id));
@@ -51,10 +56,10 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
       const records = await Promise.all((await store.keys()).filter(k => k.startsWith('session-')).map(k => store.get(k)));
       return records.filter(Boolean).map(s => `${s.id}  ${s.status}  ${s.cwd ?? ''}`).join('\n') || 'No sessions have registered yet.';
     }
-    if (action === 'status' || (action === 'model' && !targets.length)) {
+    if (action === 'status' || (['model', 'effort'].includes(action) && !targets.length)) {
       const state = await read(id);
       const paused = state.revision === c.revision && (state.status === 'halted' || (c.delivery === 'auto' && state.count >= c.limit));
-      return `${!targeted(c, id) ? 'OFF' : paused ? 'PAUSED' : 'ON'} for ${id}\nDelivery: ${c.delivery === 'suggest' ? 'suggest — Tab to accept, Enter to send' : 'auto — send automatically'}\nComposer model: ${c.predictionModel === 'session' ? 'session (coding model)' : c.predictionModel}\nScope: ${c.mode === 'all' ? 'all loaded sessions' : c.sessions.join(', ') || 'none'}\nExcluded: ${c.exclude.join(', ') || 'none'}\nLimit: ${c.limit} automatic follow-ups per session between user messages.\nLast: ${state.status}${state.error ? ' — ' + state.error : ''}`;
+      return `${!targeted(c, id) ? 'OFF' : paused ? 'PAUSED' : 'ON'} for ${id}\nDelivery: ${c.delivery === 'suggest' ? 'suggest — Tab to accept, Enter to send' : 'auto — send automatically'}\nComposer model: ${c.predictionModel === 'session' ? 'session (coding model)' : c.predictionModel}\nComposer effort: ${c.predictionEffort}\nScope: ${c.mode === 'all' ? 'all loaded sessions' : c.sessions.join(', ') || 'none'}\nExcluded: ${c.exclude.join(', ') || 'none'}\nLimit: ${c.limit} automatic follow-ups per session between user messages.\nLast: ${state.status}${state.error ? ' — ' + state.error : ''}`;
     }
     const ids = targets.map(x => x === 'here' ? id : x);
     if (action === 'on') {
@@ -69,6 +74,7 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
       else c.exclude = [...new Set([...c.exclude, ...ids.map(sessionId)])];
     } else if (action === 'mode' && ids.length === 1 && ['auto', 'suggest'].includes(ids[0])) c.delivery = ids[0];
     else if (action === 'model' && targets.length === 1) c.predictionModel = modelName(targets[0]);
+    else if (action === 'effort' && targets.length === 1) c.predictionEffort = effortName(targets[0]);
     else if (action === 'limit' && ids.length === 1) c.limit = Number(ids[0]);
     else throw Error(HELP);
     c.revision = nonce(); validateConfig(c); await store.set('config', c);
@@ -91,7 +97,7 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
       state = { ...state, id, source, cwd, status: 'predicting', updatedAt: Date.now() };
       // Reserve before the model call; reloads and ambiguous submissions never replay this source.
       await store.set(recordKey(id), state);
-      const raw = await predict(c.predictionModel);
+      const raw = await predict(c.predictionModel, c.predictionEffort);
       if (raw === null) throw Error('Prediction model did not answer. Run composer on to retry on a future turn.');
       const text = parseSuggestion(raw);
       const latest = await config();

@@ -6,6 +6,8 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   const suggested: string[] = [];
   const logs: string[] = [];
   const clock = mock.clock(on);
+  let expectedModel = 'haiku', expectedEffort;
+  const completions: unknown[] = [];
   mock.env(on, { HOME: '/test' });
   on('session.start', async (_$, e) => ({ cwd: e.cwd }));
   on('turn.complete', async (_$, e) => ({ text: e.answer }));
@@ -13,9 +15,10 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   on('fs.read', async (_$, e) => ({ value: e.path.endsWith('composer-v5.txt') ? 'EXACT_TEST_PROMPT' : files.get(e.path) }));
   on('fs.write', async (_$, e) => { files.set(e.path,e.text); return { value: undefined }; });
   on('session.id', async () => ({ value: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }));
+  on('session.model', async () => ({ value: 'coding-model' }));
   on('session.messages', async () => ({ value: [{role:'user',text:'Fix the fixture.',toolUses:[]},{role:'assistant',text:'Fixed.',toolUses:[]}] }));
   on('model.complete', async (_$, e) => {
-    expect(e.model).toBe('haiku');expect(e.prompt).toMatch('Fix the fixture.');expect(e.prompt).toMatch('EXACT_TEST_PROMPT');
+    completions.push(e);expect(e.model).toBe(expectedModel);expect(e.effort).toBe(expectedEffort);expect(e.prompt).toMatch('Fix the fixture.');expect(e.prompt).toMatch('EXACT_TEST_PROMPT');
     return { value: { isAnswered: true, text: '{\"suggestion\":\"Check the fixture.\"}' } };
   });
   on('session.cwd', async () => ({ value: '/project' }));
@@ -46,6 +49,18 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   await clock.advance(200);
   expect(suggested).toEqual(['Run the tests.','Check the fixture.']);
   expect(sent).toEqual(['Run the tests.']);
+  expectedModel = 'coding-model';expectedEffort = 'low';
+  await $.command.run({ command: 'composer', args: 'model session', origin: { kind: 'composer' } });
+  await $.command.run({ command: 'composer', args: 'effort low', origin: { kind: 'composer' } });
+  await $.turn.complete({ turnId: 'turn-effort', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
+  await clock.advance(200);
+  expect(completions.length).toBe(2);
+  expect(suggested).toEqual(['Run the tests.','Check the fixture.','Check the fixture.']);
+  await $.command.run({ command: 'composer', args: 'effort default', origin: { kind: 'composer' } });
+  await $.turn.complete({ turnId: 'turn-default-effort', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
+  await clock.advance(200);
+  expect(completions.length).toBe(2);
+  expect(suggested.at(-1)).toBe('Run the tests.');
   await $.command.run({ command: 'composer', args: 'off', origin: { kind: 'composer' } });
   await $.turn.complete({ turnId: 'turn-b', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
   await clock.advance(200);

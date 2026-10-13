@@ -18,8 +18,8 @@ async function piFixture(t) {
   const ctx={cwd:'/project',hasUI:true,sessionManager:{getSessionId:()=>id,getLeafId:()=>source},
     ui:{notify:x=>notes.push(x),getEditorText:()=>draft,setEditorText:x=>{draft=x;},setWidget:(_key,x)=>{widget=x;},onTerminalInput:fn=>{keyHandler=fn;return()=>{keyHandler=undefined;};}},model:{id:'fixture'},hasPendingMessages:()=>false,getSystemPrompt:()=> 'system',
     modelRegistry:{getAvailable:()=>[{provider:'fixture-provider',id:'fast/model'}],find:(provider,name)=>provider==='fixture-provider'&&name==='fast/model'?{provider,id:name}:undefined,hasConfiguredAuth:()=>true,streamSimple:(model,context,options)=>({result:async()=>{
-      requests.push({model,context});
-      assert.ok(context.messages.at(-1).content[0].text.startsWith(exact));assert.equal(options.reasoning,'high');
+      requests.push({model,context,options});
+      assert.ok(context.messages.at(-1).content[0].text.startsWith(exact));
       await during?.();return {stopReason:'stop',content:[{type:'text',text:response}]};
     }})}};
   const event={outcome:'completed',continue:false,context:{pendingMessages:[],llmMessages:[{role:'assistant',content:[{type:'text',text:'Done.'}]}]}};
@@ -43,7 +43,7 @@ function claudeFixture() {
   const on=(event,matcher,fn)=>hooks.set(event,fn??matcher);register(on);
   const $={env:{get:async name=>name==='HOME'?'/home/test':undefined},plugin:{root:'/plugin'},
     fs:{exists:async p=>files.has(p),read:async p=>p.endsWith('composer-v5.txt')?exact:files.get(p),write:async(p,s)=>{files.set(p,s);},list:async()=>[]},
-    session:{id:async()=>id,cwd:async()=>'/project',messages:async()=>[{role:'user',text:'Fix the widget.',toolUses:[]},{role:'assistant',text:'Fixed.',toolUses:[]}]},command:{register:async()=>{}},ui:{log:async text=>logs.push(text)},
+    session:{id:async()=>id,cwd:async()=>'/project',model:async()=>'coding-model',messages:async()=>[{role:'user',text:'Fix the widget.',toolUses:[]},{role:'assistant',text:'Fixed.',toolUses:[]}]},command:{register:async()=>{}},ui:{log:async text=>logs.push(text)},
     clock:{after:(_ms,fn)=>{timer=fn;return{cancel:()=>{timer=undefined;}};}},
     model:{complete:async request=>{requests.push(request);await during?.();return{isAnswered:true,text:'{\"suggestion\":\"Check the widget.\"}'};},fork:async({prompt})=>{requests.push({fork:true});assert.ok(prompt.startsWith(exact));await during?.();return{text:'{"suggestion":"Run the tests."}'};}},
     prompt:{read:async()=>({text:draft}),suggest:async({text})=>{suggested.push(text);return{isShown:true};},submit:async({text})=>{sent.push(text);return{text};}}};
@@ -143,4 +143,30 @@ test('Claude model failure never falls back to the coding model or sends',async(
 test('Claude switching models during completion cancels the old suggestion',async()=>{
   const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('model haiku');await f.command('on');
   f.during(()=>f.command('model sonnet'));await f.run();assert.deepEqual(f.suggested,[]);assert.deepEqual(f.sent,[]);
+});
+
+test('Pi sends every explicit effort only on Composer requests and restores its default',async t=>{
+  const f=await piFixture(t),codingModel=f.ctx.model;await f.command('on');
+  for(const effort of ['low','medium','high','xhigh','max','default']){
+    await f.command('effort '+effort);f.source('turn-'+effort);await f.run();
+    assert.equal(f.requests.at(-1).options.reasoning,effort==='default'?'high':effort);assert.equal(f.ctx.model,codingModel);
+  }
+  assert.deepEqual(f.sent,[]);
+});
+test('Claude explicit effort with session model uses independent completion; default restores fork',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('on');
+  for(const effort of ['low','medium','high','xhigh','max']){
+    await f.command('effort '+effort);await f.run({turnId:'turn-'+effort});
+    assert.equal(f.requests.at(-1).model,'coding-model');assert.equal(f.requests.at(-1).effort,effort);assert.equal(await f.$.session.model(),'coding-model');
+  }
+  await f.command('effort default');await f.run({turnId:'turn-default'});assert.equal(f.requests.at(-1).fork,true);assert.deepEqual(f.sent,[]);
+});
+test('Claude selected model effort can be reset without changing the model',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('model haiku');await f.command('effort low');await f.command('on');await f.run();
+  assert.equal(f.requests[0].model,'haiku');assert.equal(f.requests[0].effort,'low');
+  await f.command('effort default');await f.run({turnId:'turn-b'});assert.equal(f.requests[1].model,'haiku');assert.equal(Object.hasOwn(f.requests[1],'effort'),false);
+});
+test('Claude effort change during completion prevents delivery of the old result',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('effort high');await f.command('mode auto');await f.command('on');
+  f.during(()=>f.command('effort low'));await f.run();assert.deepEqual(f.sent,[]);assert.deepEqual(f.suggested,[]);
 });

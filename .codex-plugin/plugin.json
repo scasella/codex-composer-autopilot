@@ -1,6 +1,6 @@
 {
   "name": "composer-autopilot",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Opt-in background Composer prediction sending for all or selected local Codex chats.",
   "author": {
     "name": "scasella"

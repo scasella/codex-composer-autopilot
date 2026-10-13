@@ -96,7 +96,7 @@ test('legacy configs without a delivery choice default to suggestions; invalid m
 
 test('changing delivery upgrades config so older auto-only plugins refuse it',async()=>{
   const f=fixture();await f.a.command('mode suggest',id,'/a');
-  const c=await f.store.get('config');assert.equal(c.version,3);delete c.delivery;await f.store.set('config',c);
+  const c=await f.store.get('config');assert.equal(c.version,4);delete c.delivery;await f.store.set('config',c);
   await assert.rejects(f.run(),/delivery/);
 });
 
@@ -127,4 +127,30 @@ test('old configs use the session model; missing or malformed new model settings
   await f.run(f.a,{predict:async model=>{assert.equal(model,'session');return '{"suggestion":null}';}});
   await f.store.set('config',{...c,version:3});await assert.rejects(f.run(),/model ID/);
   await f.store.set('config',{...c,version:3,predictionModel:'bad model'});await assert.rejects(f.run(),/model ID/);
+});
+
+test('effort persists independently without changing model, scope, mode, or enabled state',async()=>{
+  const f=fixture();await f.a.command('model haiku',id,'/a');const before=await f.store.get('config');
+  await f.a.command('effort low',id,'/a');const after=await f.store.get('config');
+  assert.deepEqual({...after,revision:before.revision,predictionEffort:before.predictionEffort},before);
+  assert.match(await f.b.command('effort',other,'/b'),/Composer effort: low/);
+  await f.a.command('on all',id,'/a');let received;
+  await f.run(f.b,{predict:async(model,effort)=>{received={model,effort};return '{"suggestion":null}';}});
+  assert.deepEqual(received,{model:'haiku',effort:'low'});
+  await f.a.command('effort default',id,'/a');assert.equal((await f.store.get('config')).predictionEffort,'default');
+});
+test('effort changes cancel a pending result and retained Tab acceptance',async()=>{
+  const f=fixture();await f.a.command('on all',id,'/a');let suggested=false,valid;
+  await f.run(f.a,{predict:async()=>{await f.b.command('effort high',other,'/b');return '{"suggestion":"Continue."}';},suggest:async()=>{suggested=true;}});
+  assert.equal(suggested,false);assert.deepEqual(f.sent,[]);
+  await f.run(f.a,{suggest:async(_text,guard)=>{valid=guard;}});assert.equal(await valid(),true);
+  await f.b.command('effort low',other,'/b');assert.equal(await valid(),false);
+});
+test('legacy effort stays default and invalid effort never updates a saved choice',async()=>{
+  const f=fixture();await f.a.command('on all',id,'/a');const c=await f.store.get('config');c.version=3;delete c.predictionEffort;await f.store.set('config',c);
+  await f.run(f.a,{predict:async(_model,effort)=>{assert.equal(effort,'default');return '{"suggestion":null}';}});
+  for(const choice of ['ultra','minimal','0','off'])await assert.rejects(f.a.command('effort '+choice,id,'/a'),/composer effort/);
+  assert.deepEqual(await f.store.get('config'),c);
+  await f.store.set('config',{...c,version:4});await assert.rejects(f.run(),/composer effort/);
+  await f.store.set('config',{...c,version:4,predictionEffort:'unsupported'});await assert.rejects(f.run(),/composer effort/);
 });
