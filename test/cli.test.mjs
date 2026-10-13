@@ -35,3 +35,11 @@ test('conflicting selection options and malformed IDs are rejected', t => {
 test('help does not require macOS or the desktop app', t => {
   const r = fixture(t)('--help'); assert.equal(r.status, 0); assert.match(r.stdout, /--thread/);
 });
+test('incompatibility remains visible after the daemon exits', t => {
+  const run = fixture(t);
+  const dir = JSON.parse(run('status', '--json').stdout).stateDirectory;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'status.json'), JSON.stringify({ phase: 'incompatible', error: 'Renderer interface incompatible: draft' }));
+  const s = JSON.parse(run('status', '--json').stdout);
+  assert.equal(s.enabled, false); assert.equal(s.phase, 'incompatible'); assert.match(s.error, /draft/);
+});

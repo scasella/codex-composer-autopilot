@@ -7,8 +7,8 @@ One plugin skill. One small Node controller. **Zero npm dependencies, no build s
 no MCP server, no telemetry.** Off until you explicitly enable it.
 
 **Experimental:** this uses a private desktop renderer interface. The current
-adapter supports **macOS and Codex desktop 26.1007.30912** only, with Node **22.4+**.
-Other app builds stop without sending. This is not an official OpenAI feature.
+adapter supports **macOS**, with Node **22.4+**, and checks the running renderer
+interface instead of pinning an app version. Unknown interfaces stop without sending. This is not an official OpenAI feature.
 
 ## Install as a Codex plugin
 
@@ -99,6 +99,27 @@ Automatic sending can start further work and consume quota. Predictions can cont
 instructions or approval-like language. Choose the chats you want to run unattended;
 the controller does not interpret or rewrite prediction text.
 
+## Compatibility across app updates
+
+Asset hashes, minified export names, and local identifier names are discovered at
+runtime from the app's loaded modules. An app version change alone does not block
+operation. The controller requires exactly one match for each supported helper
+signature: history, busy state, continuation eligibility, drafts, scope traversal,
+and normal follow-up submission. It uses only local app code; no remote adapters
+are downloaded.
+
+Runtime guards check conversation, queue, draft, and prediction response shapes.
+An unknown queue blocks that chat until its contents load. A detected contract
+failure disables the controller, cancels pending predictions, and records
+`OFF — incompatible`. It does not automatically retry an incompatible interface.
+Run `doctor` after updating the plugin, then explicitly run `on` to resume your
+saved selection. An already-submitted turn cannot be recalled.
+
+These checks are conservative: even a harmless refactor of a required helper can
+require a plugin update. They do not prove the behavior of every private internal
+callee. The read-only adapter was verified on Codex 26.1007.30912; renamed assets
+and exports are tested synthetically. Future desktop releases still need validation.
+
 ## Local state and troubleshooting
 
 Run `status --json` for the state directory. By default it is
@@ -130,13 +151,14 @@ or deleting the package. Disabling the plugin skill alone does not stop a daemon
 npm test
 ```
 
-`src/adapter.mjs` is the only build-specific integration; `src/engine.mjs` handles
+`src/discovery.mjs` isolates the interface signatures and module discovery;
+`src/adapter.mjs` validates runtime state; `src/engine.mjs` handles
 targeting, stale predictions, leases, and cancellation. Tests cover these behaviors,
 persistence, and CLI controls. The original adapter was live-tested with actual
 unselected chats: new turns were confirmed while another app remained foreground.
 Automated tests use synthetic chats and do not send messages to your account.
 
-Contributions for other desktop builds should include read-only adapter checks and
+Changes to supported interface signatures should include read-only adapter checks and
 an explicitly authorized live send test. Do not commit state, user chat IDs, logs,
 or extracted application bundles.
 

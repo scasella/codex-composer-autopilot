@@ -1,6 +1,6 @@
 {
   "name": "codex-composer-autopilot",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Opt-in background Composer predictions for selected Codex desktop chats.",
   "type": "module",
   "bin": { "composer-autopilot": "bin/autopilot.mjs" },

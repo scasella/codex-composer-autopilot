@@ -1,14 +1,14 @@
 import { createStore, sleep } from './store.mjs';
-import { connect, install, requireSupported, slot } from './session.mjs';
+import { connect, install, appInfo, slot } from './session.mjs';
 import { foreground } from './cdp.mjs';
 
 const store = createStore(), token = process.argv[2];
 const unlock = store.lock('daemon.lock', token);
-let stop = false, cdp, snapshot, lastError, lastStatus = 0;
+let stop = false, cdp, snapshot, lastError, lastStatus = 0, blockedError;
 const ledger = store.read('ledger.json', {}), pending = new Map(), retryAt = new Map();
 const enabled = () => !stop && store.read('control.json')?.token === token && store.read('control.json')?.enabled === true;
 const call = expression => cdp.evaluate(expression);
-const stopRenderer = () => cdp?.evaluate(`if (${slot}?.snapshot().token === ${JSON.stringify(token)}) ${slot}.stop()`).catch(() => {});
+const stopRenderer = () => cdp?.evaluate(`if (${slot}?.token === ${JSON.stringify(token)}) ${slot}.stop()`).catch(() => {});
 process.on('SIGINT', () => { stop = true; void stopRenderer(); });
 process.on('SIGTERM', () => { stop = true; void stopRenderer(); });
 function record(key, status, data = {}) {
@@ -25,11 +25,13 @@ try {
     try {
       const config = store.config();
       if (!cdp) {
-        requireSupported(); cdp = await connect(config.port);
+        appInfo(); cdp = await connect(config.port);
         if (!enabled()) break;
         snapshot = await install(cdp, token, config); store.event({ status: 'connected' });
       }
       if (!enabled()) break;
+      const fault = await call(`${slot}.snapshot().fault`);
+      if (fault) throw Error(fault);
       if (!await call(`${slot}.heartbeat(${JSON.stringify(token)},${JSON.stringify(config)})`)) throw Error('Controller lease was closed');
       snapshot = await call(`${slot}.snapshot()`);
       for (const job of snapshot.jobs) {
@@ -77,6 +79,12 @@ try {
     } catch (e) {
       const message = e.message ?? String(e);
       if (lastError !== message) store.event({ status: 'waiting', error: message });
+      if (message.includes('Renderer interface incompatible:')) {
+        blockedError = message;
+        store.write('control.json', { enabled: false, token });
+        store.event({ status: 'incompatible', error: message });
+        break;
+      }
       lastError = message; status('waiting', message);
       await stopRenderer(); cdp?.close(); cdp = null;
       await sleep(4000);
@@ -84,4 +92,4 @@ try {
     await sleep(750);
   }
 } catch (e) { store.event({ status: 'fatal', error: String(e) }); process.exitCode = 1; }
-finally { stop = true; await stopRenderer(); cdp?.close(); status('off'); store.event({ status: 'off' }); unlock(); }
+finally { stop = true; await stopRenderer(); cdp?.close(); status(blockedError ? 'incompatible' : 'off', blockedError); store.event({ status: 'off' }); unlock(); }

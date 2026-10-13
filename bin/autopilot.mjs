@@ -6,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { createStore, validate, alive, sleep } from '../src/store.mjs';
-import { connect, inspect, appInfo, requireSupported, slot, supportedVersion } from '../src/session.mjs';
+import { connect, inspect, appInfo, slot } from '../src/session.mjs';
 
 const help = `Composer Autopilot — background predictions for Codex desktop
 
@@ -23,7 +23,7 @@ const help = `Composer Autopilot — background predictions for Codex desktop
 
 Options: --exclude UUID (repeatable with on), --exclude-current (on), --port 9222,
          --json (status/threads/doctor). Nothing starts merely by installing.
-Requires macOS, Node >=22.4, Codex ${supportedVersion}.`;
+Requires macOS, Node >=22.4, a compatible Codex renderer (run doctor).`;
 const store = createStore();
 const { positionals, values } = parseArgs({ allowPositionals: true, options: {
   all: { type: 'boolean' }, thread: { type: 'string', multiple: true }, exclude: { type: 'string', multiple: true },
@@ -35,8 +35,8 @@ function currentStatus() {
   const lock = store.read('daemon.lock'), control = store.read('control.json'), state = store.read('status.json', {});
   const running = !!(lock && alive(lock.pid) && control?.enabled && lock.token === control.token);
   const fresh = running && state.pid === lock.pid && Date.now() - state.updatedAt < 15000;
-  return { enabled: running, phase: !running ? 'off' : fresh ? state.phase : 'starting-or-unresponsive',
-    error: fresh ? state.error : undefined, config: store.config(),
+  return { enabled: running, phase: !running ? (state.phase === 'incompatible' ? 'incompatible' : 'off') : fresh ? state.phase : 'starting-or-unresponsive',
+    error: fresh || state.phase === 'incompatible' ? state.error : undefined, config: store.config(),
     monitoredChats: fresh ? state.chats.filter(c => c.targeted && !c.excluded).length : 0,
     verifiedSends: state.sent ?? 0, stateDirectory: store.dir };
 }
@@ -57,7 +57,7 @@ try {
   if ((values.all || values.thread || values.exclude || values['exclude-current']) && command !== 'on') throw Error('Target options belong to the on command.');
   if (command === 'status') report();
   else if (command === 'threads') {
-    requireSupported();
+    appInfo();
     const result = await withRenderer(inspect);
     output(result.chats, result.chats.filter(c => !c.excluded).map(c =>
       `${c.id}  ${c.status ?? 'loading'}${c.hasDraft ? ' (draft)' : ''}  ${c.title ?? '(untitled)'}`).join('\n') || 'No active local chats.');
@@ -65,11 +65,11 @@ try {
     const info = appInfo(); let connection;
     try { const s = await withRenderer(inspect); connection = { ok: true, activeChats: s.chats.filter(c => !c.excluded).length }; }
     catch (e) { connection = { ok: false, error: e.message }; }
-    output({ ...info, connection }, `Codex ${info.version}: ${info.supported ? 'supported' : 'unsupported'}\n` +
-      (connection.ok ? `Local renderer reachable; ${connection.activeChats} active chats.` : `Renderer unavailable: ${connection.error}\nUse launch after quitting Codex when convenient.`));
-    if (!info.supported || !connection.ok) process.exitCode = 1;
+    output({ ...info, connection }, `Codex ${info.version}: ${connection.ok ? 'interface verified' : 'not verified'}\n` +
+      (connection.ok ? `Local renderer reachable; ${connection.activeChats} active chats.` : `Renderer check failed: ${connection.error}`));
+    if (!connection.ok) process.exitCode = 1;
   } else if (command === 'launch') {
-    const { app } = requireSupported(); const port = Number(values.port ?? store.config().port);
+    const { app } = appInfo(); const port = Number(values.port ?? store.config().port);
     validate({ ...store.config(), port });
     execFileSync('/usr/bin/open', ['-g', '-a', app, '--args', '--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${port}`]);
     console.log(`Background launch requested on 127.0.0.1:${port}. Run doctor to check. An already-running app must be quit manually before launch flags can change.`);
@@ -79,7 +79,7 @@ try {
       if (command === 'off') {
         const control = store.read('control.json', {});
         store.write('control.json', { ...control, enabled: false });
-        try { await withRenderer(c => c.evaluate(`if (${slot}?.snapshot().token === ${JSON.stringify(control.token ?? '')}) ${slot}.stop()`)); }
+        try { await withRenderer(c => c.evaluate(`if (${slot}?.token === ${JSON.stringify(control.token ?? '')}) ${slot}.stop()`)); }
         catch { /* Durable OFF is also checked by the daemon before each send. */ }
         console.log('Composer Autopilot: OFF. Already-submitted turns keep running.');
       } else if (command === 'include' || command === 'exclude') {
@@ -101,7 +101,7 @@ try {
         config.port = Number(values.port ?? config.port);
         validate(config);
         if (config.mode === 'selected' && !config.threads.length) throw Error('Choose --all or at least one --thread UUID.');
-        requireSupported();
+        appInfo();
         const existing = store.read('daemon.lock');
         if (existing && alive(existing.pid)) {
           if (!store.read('control.json')?.enabled) throw Error('Controller is stopping; retry in a moment.');
@@ -112,6 +112,7 @@ try {
             const busy = await c.evaluate(`${slot}?.snapshot().enabled ?? false`);
             if (busy) throw Error('Another Composer Autopilot controller is active. Turn it off first.');
           });
+          await withRenderer(inspect);
           const token = randomUUID(); store.write('config.json', validate(config));
           store.write('control.json', { enabled: true, token });
           const fd = fs.openSync(store.file('daemon.log'), 'a', 0o600);

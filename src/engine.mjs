@@ -2,6 +2,18 @@
 export function createEngine(api, token, now = Date.now) {
   let enabled = true, lease = now() + 15000;
   const jobs = new Map();
+  let fault = null;
+  function trip(error) {
+    enabled = false;
+    fault = `Renderer interface incompatible: ${String(error)}`;
+    for (const job of jobs.values()) if (['predicting', 'ready'].includes(job.status)) job.status = 'cancelled';
+    return Error(fault);
+  }
+  const raw = api;
+  api = Object.fromEntries(Object.entries(raw).map(([name, fn]) => [name, (...args) => {
+    if (fault) throw Error(fault);
+    try { return fn(...args); } catch (e) { throw trip(e); }
+  }]));
   let excludedThreads = new Set(), mode = 'selected', selectedThreads = new Set();
   const isExcluded = c => c && excludedThreads.has(c.id);
   const live = () => enabled && now() < lease;
@@ -17,10 +29,11 @@ export function createEngine(api, token, now = Date.now) {
     if (c.hasDraft) return 'draft';
     return null;
   }
-  const snapshot = () => ({ enabled: live(), token, ui: api.ui(),
-    chats: api.list().map(c => ({ ...c, excluded: c.excluded || isExcluded(c), userExcluded: isExcluded(c), targeted: mode === 'all' || selectedThreads.has(c.id) })), jobs: [...jobs.values()].map(({ prediction, ...j }) => ({ ...j,
+  const snapshot = () => ({ enabled: live(), token, fault, ui: fault ? null : api.ui(),
+    chats: (fault ? [] : api.list()).map(c => ({ ...c, excluded: c.excluded || isExcluded(c), userExcluded: isExcluded(c), targeted: mode === 'all' || selectedThreads.has(c.id) })), jobs: [...jobs.values()].map(({ prediction, ...j }) => ({ ...j,
       predictionThreadId: prediction?.predictionThreadId })) });
   return {
+    token,
     configure(config) {
       mode = config.mode; selectedThreads = new Set(config.threads); this.setExclusions(config.exclude);
     },
@@ -33,9 +46,13 @@ export function createEngine(api, token, now = Date.now) {
     heartbeat(t, config) {
       if (t !== token || !enabled) return false;
       if (config !== undefined) this.configure(config);
-      lease = now() + 15000; api.refresh?.(); return true;
+      api.health?.(); lease = now() + 15000; api.refresh?.(); return true;
     },
-    stop() { enabled = false; return snapshot(); },
+    stop() {
+      enabled = false;
+      for (const job of jobs.values()) if (['predicting', 'ready'].includes(job.status)) job.status = 'cancelled';
+      return { enabled: false, token, fault };
+    },
     snapshot,
     request(c) {
       const key = keyOf(c);
@@ -54,7 +71,7 @@ export function createEngine(api, token, now = Date.now) {
         job.prediction = prediction;
         job.status = prediction?.text?.trim() ? 'ready' : 'abstained';
         job.readyAt = now();
-      }, e => { job.status = 'prediction-error'; job.error = String(e); });
+      }).catch(e => { if (String(e).includes('Renderer interface incompatible:')) trip(e); job.status = 'prediction-error'; job.error = String(e); });
       return job.status;
     },
     send(key, t) {
@@ -78,7 +95,7 @@ export function createEngine(api, token, now = Date.now) {
           const evidence = api.verify(job, job.prediction.text);
           job.status = evidence ? 'sent' : 'unconfirmed'; job.evidence = evidence;
         });
-      }).catch(e => { job.status = 'send-error'; job.error = String(e); });
+      }).catch(e => { if (String(e).includes('Renderer interface incompatible:')) trip(e); job.status = 'send-error'; job.error = String(e); });
       return { status: job.status, before: job.before };
     },
     verify(key) {
