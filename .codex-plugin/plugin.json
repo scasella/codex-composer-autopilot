@@ -1,0 +1,15 @@
+{
+  "name": "composer-autopilot",
+  "version": "0.1.0",
+  "description": "Opt-in background Composer prediction sending for all or selected local Codex chats.",
+  "author": { "name": "scasella" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Composer Autopilot",
+    "shortDescription": "Send predictions in chosen Codex chats without taking focus",
+    "longDescription": "A small local controller with all-active or selected-thread targeting, exclusions, and on/off controls. Requires macOS and a supported Codex desktop build with loopback debugging enabled. Off by default.",
+    "developerName": "scasella",
+    "category": "Productivity",
+    "defaultPrompt": ["Show Composer Autopilot status", "Enable Composer Autopilot for selected chats"]
+  }
+}

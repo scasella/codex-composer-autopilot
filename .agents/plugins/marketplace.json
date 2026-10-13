@@ -1,0 +1,10 @@
+{
+  "name": "scasella-composer-autopilot",
+  "interface": { "displayName": "Composer Autopilot" },
+  "plugins": [{
+    "name": "composer-autopilot",
+    "source": { "source": "local", "path": "./" },
+    "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+    "category": "Productivity"
+  }]
+}
