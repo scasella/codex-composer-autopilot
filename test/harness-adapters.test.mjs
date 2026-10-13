@@ -25,7 +25,7 @@ async function piFixture(t) {
   const event={outcome:'completed',continue:false,context:{pendingMessages:[],llmMessages:[{role:'assistant',content:[{type:'text',text:'Done.'}]}]}};
   const run=()=>hooks.get('agent_before_settle')(event,ctx);
   await hooks.get('session_start')({},ctx);
-  return {dir,hooks,ctx,event,sent,notes,requests,run,source:x=>{source=x;},key:data=>keyHandler?.(data),widget:()=>widget,draft:()=>draft,command:args=>command(args,ctx),setDraft:x=>{draft=x;},during:fn=>{during=fn;}};
+  return {dir,hooks,ctx,event,sent,notes,requests,run,source:x=>{source=x;},key:data=>keyHandler?.(data),widget:()=>widget,draft:()=>draft,command:args=>command(args,ctx),response:x=>{response=x;},setDraft:x=>{draft=x;},during:fn=>{during=fn;}};
 }
 test('Pi native boundary submits exact text without invoking commands or changing draft',async t=>{
   const f=await piFixture(t);await f.command('mode auto');await f.command('on');await f.run();
@@ -39,16 +39,16 @@ test('Pi skips drafts, aborted turns, and queued continuation',async t=>{
   f.event.outcome='aborted';await f.run();f.event.outcome='completed';f.event.context.pendingMessages=[{}];await f.run();assert.equal(f.sent.length,0);
 });
 function claudeFixture() {
-  const hooks=new Map(),files=new Map(),sent=[],suggested=[],logs=[],requests=[];let timer,draft='',during;
+  const hooks=new Map(),files=new Map(),sent=[],suggested=[],logs=[],requests=[];let timer,draft='',during,response;
   const on=(event,matcher,fn)=>hooks.set(event,fn??matcher);register(on);
   const $={env:{get:async name=>name==='HOME'?'/home/test':undefined},plugin:{root:'/plugin'},
     fs:{exists:async p=>files.has(p),read:async p=>p.endsWith('composer-v5.txt')?exact:files.get(p),write:async(p,s)=>{files.set(p,s);},list:async()=>[]},
-    session:{id:async()=>id,cwd:async()=>'/project',model:async()=>'coding-model',messages:async()=>[{role:'user',text:'Fix the widget.',toolUses:[]},{role:'assistant',text:'Fixed.',toolUses:[]}]},command:{register:async()=>{}},ui:{log:async text=>logs.push(text)},
+    session:{id:async()=>id,cwd:async()=>'/project',model:async()=>'coding-model',messages:async()=>[{role:'user',text:'Fix the widget.',toolUses:[]},{role:'assistant',text:'Fixed.',toolUses:[]}]},command:{register:async()=>{}},ui:{log:async text=>logs.push(text),invalidate:()=>{},resolve:()=>Object.fromEntries(['Box','Text','Select'].map(type=>[type,props=>({type,props})]))},
     clock:{after:(_ms,fn)=>{timer=fn;return{cancel:()=>{timer=undefined;}};}},
-    model:{complete:async request=>{requests.push(request);await during?.();return{isAnswered:true,text:'{\"suggestion\":\"Check the widget.\"}'};},fork:async({prompt})=>{requests.push({fork:true});assert.ok(prompt.startsWith(exact));await during?.();return{text:'{"suggestion":"Run the tests."}'};}},
+    model:{complete:async request=>{requests.push(request);await during?.();return{isAnswered:true,text:response??'{\"suggestion\":\"Check the widget.\"}'};},fork:async({prompt})=>{requests.push({fork:true,prompt});assert.ok(prompt.startsWith(exact));await during?.();return{text:response??'{"suggestion":"Run the tests."}'};}},
     prompt:{read:async()=>({text:draft}),suggest:async({text})=>{suggested.push(text);return{isShown:true};},submit:async({text})=>{sent.push(text);return{text};}}};
   const next=async()=>({});const emit=(name,event={})=>hooks.get(name)($,event,next);
-  return {$,sent,suggested,logs,requests,emit,during:fn=>{during=fn;},setDraft:s=>{draft=s;},command:args=>emit('command.run',{args}),
+  return {$,sent,suggested,logs,requests,emit,response:x=>{response=x;},during:fn=>{during=fn;},setDraft:s=>{draft=s;},command:args=>emit('command.run',{args}),
     async run(event={}){await emit('turn.complete',{turnId:'turn-a',reason:'answer',isAborted:false,answer:'Done.',...event});const fn=timer;timer=undefined;if(fn)await fn();await settle();}};
 }
 test('Claude native adapter forks context and submits one user prompt',async()=>{
@@ -169,4 +169,41 @@ test('Claude selected model effort can be reset without changing the model',asyn
 test('Claude effort change during completion prevents delivery of the old result',async()=>{
   const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('effort high');await f.command('mode auto');await f.command('on');
   f.during(()=>f.command('effort low'));await f.run();assert.deepEqual(f.sent,[]);assert.deepEqual(f.suggested,[]);
+});
+
+
+test('Pi cycles candidate previews in both directions, wraps, and Tab accepts only the selected draft',async t=>{
+  const f=await piFixture(t);await f.command('suggestions 3');await f.command('on');f.response('{"suggestions":["Run tests.","Review diff.","Commit changes."]}');await f.run();
+  assert.equal(f.requests.length,1);assert.match(f.requests[0].context.messages.at(-1).content[0].text,/"maxItems":3/);assert.match(f.widget()[0],/1\/3/);
+  assert.deepEqual(f.key('\x1b[A'),{consume:true});await waitFor(()=>f.widget()[0].includes('3/3'));
+  assert.deepEqual(f.key('\x1b[B'),{consume:true});await waitFor(()=>f.widget()[0].includes('1/3'));
+  assert.deepEqual(f.key('\x1b[57353u'),{consume:true});await waitFor(()=>f.widget()[0].includes('2/3'));
+  f.key('\t');await waitFor(()=>f.draft()!=='');assert.equal(f.draft(),'Review diff.');assert.deepEqual(f.sent,[]);
+});
+test('Pi cycling refuses stale settings and ordinary arrows pass through without multiple candidates',async t=>{
+  const f=await piFixture(t);assert.equal(f.key('\x1b[B'),undefined);await f.command('suggestions 2');await f.command('on');f.response('{"suggestions":["Run tests.","Review diff."]}');await f.run();
+  const p=path.join(f.dir,'config.json'),c=JSON.parse(await fs.readFile(p,'utf8'));c.enabled=false;c.revision='external-off';await fs.writeFile(p,JSON.stringify(c));
+  f.key('\x1b[B');await waitFor(()=>f.widget()===undefined);assert.equal(f.draft(),'');assert.deepEqual(f.sent,[]);
+});
+test('Claude native candidate picker preserves the host UI and previews a selection without sending',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('suggestions 3');await f.command('on');f.response('{"suggestions":["Run tests.","Review diff.","Commit changes."]}');await f.run();
+  assert.equal(f.requests.length,1);assert.match(f.requests[0].prompt,/"maxItems":3/);
+  const tree=await f.emit('ui.render',{component:'AbovePrompt',surface:'terminal'}),picker=tree.props.children[2];
+  assert.deepEqual(tree.props.children[0],{});assert.equal(picker.type,'Select');assert.equal(picker.props.options.length,3);
+  await picker.props.onSelect('1');assert.deepEqual(f.suggested,['Run tests.','Review diff.']);assert.deepEqual(f.sent,[]);
+  await f.emit('prompt.edit',{text:'my draft'});await picker.props.onSelect('2');assert.equal(f.suggested.length,2);assert.deepEqual(await f.emit('ui.render',{component:'AbovePrompt',surface:'terminal'}),{});
+});
+test('Claude picker rechecks settings changed by another session before selecting',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('suggestions 2');await f.command('on');f.response('{"suggestions":["Run tests.","Review diff."]}');await f.run();
+  const tree=await f.emit('ui.render',{component:'AbovePrompt',surface:'terminal'}),picker=tree.props.children[2];
+  const p='/home/test/.claude/composer-autopilot/config.json',c=JSON.parse(await f.$.fs.read(p));c.enabled=false;c.revision='external-off';await f.$.fs.write(p,JSON.stringify(c));
+  await picker.props.onSelect('1');assert.deepEqual(f.suggested,['Run tests.']);assert.deepEqual(f.sent,[]);
+});
+
+
+test('Claude explicit model and effort send the multi-candidate schema through complete',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('suggestions 2');await f.command('model haiku');await f.command('effort low');await f.command('on');f.response('{"suggestions":["Run tests.","Review diff."]}');await f.run();
+  assert.equal(f.requests.length,1);assert.equal(f.requests[0].model,'haiku');assert.equal(f.requests[0].effort,'low');assert.match(f.requests[0].prompt,/"maxItems":2/);assert.deepEqual(f.suggested,['Run tests.']);
+  for(const props of [{hasSurvey:true},{isWorking:true},{view:{agentId:'subagent'}}])assert.deepEqual(await f.emit('ui.render',{component:'AbovePrompt',surface:'terminal',props}),{});
+  assert.deepEqual(f.sent,[]);
 });

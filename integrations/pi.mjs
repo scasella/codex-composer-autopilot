@@ -17,6 +17,7 @@ export default function composer(pi) {
   const control = createController(nodeStore());
   let epoch = 0, dialog = 0, abort, offer, unsubscribe;
   const clearOffer = () => { offer?.ui.setWidget('composer-suggestion', undefined); offer = undefined; };
+  const drawOffer = () => { if (offer) offer.ui.setWidget('composer-suggestion', [`${offer.candidates.length > 1 ? `↑/↓ ${offer.index + 1}/${offer.candidates.length} · ` : ''}Tab to accept · ${offer.candidates[offer.index]}`]); };
   const cancel = () => { epoch++; abort?.abort(); clearOffer(); };
   const id = ctx => ctx.sessionManager.getSessionId();
   const report = (ctx, e) => ctx.ui.notify(`Composer paused: ${String(e)}`, 'error');
@@ -43,11 +44,23 @@ export default function composer(pi) {
       // Focus reports and key releases are not edits (including Tab release).
       if (data === '\x1b[I' || data === '\x1b[O' || /^\x1b\[[\d;:]*:3[uA-Z~]$/.test(data)) return;
       const tab = data === '\t' || /^\x1b\[9(?:;1(?::[12])?)?u$/.test(data);
+      const direction = /^(?:\x1b\[A|\x1bOA|\x1b\[1;1(?::[12])?A|\x1b\[57352(?:;1(?::[12])?)?u)$/.test(data) ? -1 :
+        /^(?:\x1b\[B|\x1bOB|\x1b\[1;1(?::[12])?B|\x1b\[57353(?:;1(?::[12])?)?u)$/.test(data) ? 1 : 0;
+      if (direction && offer?.candidates.length > 1 && !ctx.ui.getEditorText().trim()) {
+        const pending = offer;
+        pending.index = (pending.index + direction + pending.candidates.length) % pending.candidates.length;
+        void (async () => {
+          if (offer !== pending) return;
+          if (!await pending.valid()) { if (offer === pending) clearOffer(); return; }
+          if (offer === pending) drawOffer();
+        })().catch(error => { if (offer === pending) clearOffer(); report(ctx, error); });
+        return { consume: true };
+      }
       if (tab && offer && !ctx.ui.getEditorText().trim()) {
-        const pending = offer, generation = epoch;
+        const pending = offer, text = offer.candidates[offer.index], generation = epoch;
         clearOffer();
         void (async () => {
-          if (await pending.valid() && epoch === generation && !ctx.ui.getEditorText().trim()) ctx.ui.setEditorText(pending.text);
+          if (await pending.valid() && epoch === generation && !ctx.ui.getEditorText().trim()) ctx.ui.setEditorText(text);
         })().catch(error => report(ctx, error));
         return { consume: true };
       }
@@ -77,22 +90,22 @@ export default function composer(pi) {
       !ctx.hasPendingMessages() && !ctx.ui.getEditorText().trim();
     try {
       await control.run({ id: session, source, cwd: ctx.cwd, current, supportsSuggestions: Boolean(ctx.hasUI && unsubscribe),
-        async predict(choice, effort) {
+        async predict(choice, effort, count) {
           const model = predictionModel(ctx, choice);
           const exact = await fs.readFile(new URL('../prompts/composer-v5.txt', import.meta.url), 'utf8');
           const stream = ctx.modelRegistry.streamSimple(model, {
             systemPrompt: ctx.getSystemPrompt(), messages: [...event.context.llmMessages,
-              { role: 'user', content: [{ type: 'text', text: predictionRequest(exact) }], timestamp: Date.now() }]
+              { role: 'user', content: [{ type: 'text', text: predictionRequest(exact, count) }], timestamp: Date.now() }]
           }, { reasoning: effort === 'default' ? 'high' : effort, maxTokens: 4096, signal, sessionId: `composer-${session}` });
           const result = await stream.result();
           if (['error', 'aborted'].includes(result.stopReason)) return null;
           return result.content.filter(x => x.type === 'text').map(x => x.text).join('');
         },
-        suggest(text, valid) {
+        suggest(text, valid, candidates) {
           finished = true;
           clearOffer();
-          offer = { text, valid, ui: ctx.ui };
-          ctx.ui.setWidget('composer-suggestion', [`Tab to accept · ${text}`]);
+          offer = { candidates, index: 0, valid, ui: ctx.ui };
+          drawOffer();
           return true;
         },
         submit(text) { pi.sendUserMessage(text, { deliverAs: 'followUp', expandPromptTemplates: false }); }

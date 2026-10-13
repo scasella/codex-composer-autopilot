@@ -6,11 +6,12 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   const suggested: string[] = [];
   const logs: string[] = [];
   const clock = mock.clock(on);
-  let expectedModel = 'haiku', expectedEffort;
+  let expectedModel = 'haiku', expectedEffort, batch = false;
   const completions: unknown[] = [];
   mock.env(on, { HOME: '/test' });
   on('session.start', async (_$, e) => ({ cwd: e.cwd }));
   on('turn.complete', async (_$, e) => ({ text: e.answer }));
+  on('ui.render', () => ({ type: 'Box', props: {}, children: [] }));
   on('fs.exists', async (_$, e) => ({ value: files.has(e.path) }));
   on('fs.read', async (_$, e) => ({ value: e.path.endsWith('composer-v5.txt') ? 'EXACT_TEST_PROMPT' : files.get(e.path) }));
   on('fs.write', async (_$, e) => { files.set(e.path,e.text); return { value: undefined }; });
@@ -27,7 +28,7 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   on('prompt.read', async () => ({ value: { text: '', cursor: 0 } }));
   on('model.fork', async (_$, e) => {
     expect(e.prompt).toStartWith('EXACT_TEST_PROMPT\n\n');
-    return { value: { text: '{"suggestion":"Run the tests."}', usage: {} } };
+    return { value: { text: batch ? '{"suggestions":["Run the tests.","Review the diff.","Commit the change."]}' : '{"suggestion":"Run the tests."}', usage: {} } };
   });
   on('prompt.suggest', async (_$, e) => { suggested.push(e.text); return { isShown: true }; });
   on('prompt.submit', async (_$, e) => { sent.push(e.text); return { text: e.text }; });
@@ -61,6 +62,21 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   await clock.advance(200);
   expect(completions.length).toBe(2);
   expect(suggested.at(-1)).toBe('Run the tests.');
+  batch = true;
+  await $.command.run({ command: 'composer', args: 'suggestions 3', origin: { kind: 'composer' } });
+  await $.turn.complete({ turnId: 'turn-candidates', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
+  await clock.advance(200);
+  for (const surface of ['terminal','desktop'] as const) {
+    const ui = await $.ui.mount({ plugin: 'composer-autopilot', surface, component: 'AbovePrompt', props: {
+      hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100,
+      scroll: { offset: 0, bodyRows: 10 }, view: {}
+    } });
+    expect(await ui.find({ key: 'composer-candidates' })).toBeDefined();
+    await ui.select({ key: 'composer-candidates', value: '1' });
+    expect(suggested.at(-1)).toBe('Review the diff.');
+    expect(sent).toEqual(['Run the tests.']);
+    await ui.unmount();
+  }
   await $.command.run({ command: 'composer', args: 'off', origin: { kind: 'composer' } });
   await $.turn.complete({ turnId: 'turn-b', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
   await clock.advance(200);

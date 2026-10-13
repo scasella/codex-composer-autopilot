@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { createController, parseSuggestion, predictionRequest } from '../integrations/core.mjs';
+import { createController, parseSuggestion, parseSuggestions, predictionRequest } from '../integrations/core.mjs';
 const id = 'session-aaaaaaaa', other = 'session-bbbbbbbb';
 function fixture() {
   const values = new Map(), sent = [], predicted = [];
@@ -96,7 +96,7 @@ test('legacy configs without a delivery choice default to suggestions; invalid m
 
 test('changing delivery upgrades config so older auto-only plugins refuse it',async()=>{
   const f=fixture();await f.a.command('mode suggest',id,'/a');
-  const c=await f.store.get('config');assert.equal(c.version,4);delete c.delivery;await f.store.set('config',c);
+  const c=await f.store.get('config');assert.equal(c.version,5);delete c.delivery;await f.store.set('config',c);
   await assert.rejects(f.run(),/delivery/);
 });
 
@@ -153,4 +153,38 @@ test('legacy effort stays default and invalid effort never updates a saved choic
   assert.deepEqual(await f.store.get('config'),c);
   await f.store.set('config',{...c,version:4});await assert.rejects(f.run(),/composer effort/);
   await f.store.set('config',{...c,version:4,predictionEffort:'unsupported'});await assert.rejects(f.run(),/composer effort/);
+});
+
+
+test('suggestion count persists without enabling or changing other settings; legacy configs default to one',async()=>{
+  const f=fixture();await f.a.command('model haiku',id,'/a');const before=await f.store.get('config');
+  await f.a.command('suggestions 3',id,'/a');const after=await f.store.get('config');
+  assert.deepEqual({...after,revision:before.revision,suggestionCount:before.suggestionCount},before);
+  assert.match(await f.b.command('suggestions',other,'/b'),/Suggestions: 3/);
+  for(const n of ['0','11','1.5','-1','NaN','Infinity'])await assert.rejects(f.a.command('suggestions '+n,id,'/a'));
+  assert.deepEqual(await f.store.get('config'),after);
+  const legacy={...after,version:4};delete legacy.suggestionCount;await f.store.set('config',legacy);
+  assert.match(await f.a.command('status',id,'/a'),/Suggestions: 1/);
+  await f.store.set('config',{...legacy,version:5});await assert.rejects(f.run(),/suggestions N/);
+});
+test('multi suggestions use one request, deduplicate, abstain, and keep auto mode at one',async()=>{
+  const f=fixture();await f.a.command('suggestions 3',id,'/a');await f.a.command('on all',id,'/a');let offered,guard,calls=0;
+  await f.run(f.b,{predict:async(_model,_effort,count)=>{calls++;assert.equal(count,3);return JSON.stringify({suggestions:['Run tests.','Review diff.',' run tests. ']});},suggest:async(text,valid,candidates)=>{offered=candidates;guard=valid;assert.equal(text,'Run tests.');}});
+  assert.equal(calls,1);assert.deepEqual(offered,['Run tests.','Review diff.']);assert.equal(await guard(),true);assert.deepEqual(f.sent,[]);
+  await f.a.command('suggestions 2',id,'/a');assert.equal(await guard(),false);
+  await f.run(f.b,{predict:async()=>'{"suggestions":[]}',suggest:async()=>assert.fail('abstention cannot show')});
+  assert.equal(f.values.get('session-'+id).status,'abstained');
+  await f.a.command('mode auto',id,'/a');await f.run(f.b,{predict:async(_model,_effort,count)=>{assert.equal(count,1);return '{"suggestion":"Run tests."}';}});assert.deepEqual(f.sent,['Run tests.']);
+});
+test('multi-candidate output validates the entire batch before any delivery',()=>{
+  for(const value of [{suggestion:'x'},{suggestions:[null]},{suggestions:['a','b','c','d']},{suggestions:['good',42]},{suggestions:['a\nb']},{suggestions:['x'.repeat(241)]},{suggestions:['']},{suggestions:['a'],extra:true}])assert.throws(()=>parseSuggestions(JSON.stringify(value),3));
+  assert.deepEqual(parseSuggestions('{"suggestions":[]}',3),[]);
+  assert.deepEqual(parseSuggestions('{"suggestion":null}'),[]);
+  assert.ok(predictionRequest('EXACT',3).startsWith('EXACT\n\n'));
+  assert.match(predictionRequest('EXACT',3),/"maxItems":3/);
+});
+test('changing suggestion count during generation discards the whole batch',async()=>{
+  const f=fixture();await f.a.command('on all',id,'/a');await f.a.command('suggestions 3',id,'/a');
+  await f.run(f.a,{predict:async()=>{await f.b.command('suggestions 2',other,'/b');return '{"suggestions":["Run tests.","Review diff."]}';},suggest:async()=>assert.fail('stale batch')});
+  assert.equal(f.values.get('session-'+id).status,'cancelled');assert.deepEqual(f.sent,[]);
 });

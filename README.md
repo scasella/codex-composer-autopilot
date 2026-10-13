@@ -58,6 +58,8 @@ releases with only shell hooks cannot run this integration.
 | `/composer model` | Show the saved Composer model and status |
 | `/composer effort LEVEL` | Set prediction effort: `low`, `medium`, `high`, `xhigh`, or `max`; `default` resets it |
 | `/composer effort` | Show the saved Composer effort and status |
+| `/composer suggestions N` | Request up to 1–10 candidates in suggestion mode (default 1) |
+| `/composer suggestions` | Show the saved count and status |
 | `/composer limit 10` | Set the maximum automatic follow-ups per session between human messages |
 
 Suggestion mode is the default. Choose your target scope:
@@ -87,8 +89,8 @@ work. A native Claude suggestion already displayed may remain until the next edi
 or turn, but accepting it still requires your action and never sends it itself.
 
 **Upgrade:** update/reload every loaded instance before using the new setting.
-The first settings change writes config version 4, which older plugins reject
-rather than ignoring the selected delivery mode, Composer model, or effort. Pi: `pi update git:github.com/scasella/codex-composer-autopilot` then `/reload`.
+The first settings change writes config version 5, which older plugins reject
+rather than ignoring the selected delivery mode, Composer model, effort, or suggestion count. Pi: `pi update git:github.com/scasella/codex-composer-autopilot` then `/reload`.
 Claude Code: `claude plugin marketplace update scasella-composer-autopilot`,
 `claude plugin update composer-autopilot@scasella-composer-autopilot`, then start a
 new session. This update does not change Codex desktop behavior.
@@ -106,6 +108,42 @@ given session ID. State lives in `~/.pi/agent/composer-autopilot` and
 `COMPOSER_CLAUDE_HOME`. State stores IDs, counters and outcomes, not prediction
 text. A submission marked `submitted` means the native host accepted it, not that
 the resulting coding task succeeded.
+
+### Browse multiple suggestions
+
+```text
+/composer suggestions 3
+```
+
+In suggestion mode, this requests **up to N distinct candidates in one model
+call**, using the saved Composer model and effort. The range is 1–10; the default
+is 1. The model may return fewer candidates or abstain. Duplicate candidates are
+removed. No extra calls are made to fill the count. More candidates may use more
+output tokens. The count persists across targeted sessions in this harness.
+
+- **Pi:** while the preview is visible and the editor is empty, use **↑/↓** to
+  cycle candidates (wrapping at either end), then **Tab** to copy the selected
+  candidate into the draft. **Enter** sends only after acceptance. Arrows keep
+  their normal behavior when there is no multi-candidate preview.
+- **Claude Code:** the first candidate appears as native ghost text, with a
+  native picker above the prompt when there are alternatives. Press **Ctrl+X,
+  then Tab** (the default band-focus binding), or click the picker. Use **↑/↓**
+  to browse and **Enter** to choose; then **Esc** returns to the prompt and
+  **Tab** accepts the chosen ghost text. A subsequent **Enter** sends. Claude's
+  native ghost-text API accepts one string and has no candidate-cycling API;
+  arrows in the prompt retain their normal history behavior. The picker uses
+  the native terminal/desktop above-prompt surface and never takes focus itself.
+
+Typing, starting a turn, or changing Composer settings discards pending work and
+invalidates the picker. Selection checks the current target settings again, so
+OFF in another session prevents picking a retained candidate. An already shown
+Claude ghost suggestion may remain until the next edit or turn; it never sends
+itself. Candidates stay in memory and are not added to plugin state files.
+
+`/composer suggestions 1` restores the single-preview behavior. **Auto mode always
+requests and sends one prediction**, regardless of this setting; it never sends
+a batch of alternatives. The setting does not enable Composer, change its scope,
+or change delivery mode.
 
 ### Choose a Composer model
 
@@ -179,6 +217,8 @@ Codex's prediction configuration on October 13, 2026, saved in
 [`prompts/composer-v5.txt`](prompts/composer-v5.txt). Its SHA-256 is
 `bf64e2c1b0e11dca1a982ab95e77afc4046422b3605849fb9d9da0fdca069418`.
 A JSON output constraint is appended separately; the original prompt is unchanged.
+For multiple candidates, the appended instruction requests a ranked suggestions
+array instead of the single-suggestion object.
 
 Pi sends a separate prediction request with the current conversation and system
 prompt to the chosen model, requesting the saved effort (high by default). Claude
