@@ -207,3 +207,14 @@ test('Claude explicit model and effort send the multi-candidate schema through c
   for(const props of [{hasSurvey:true},{isWorking:true},{view:{agentId:'subagent'}}])assert.deepEqual(await f.emit('ui.render',{component:'AbovePrompt',surface:'terminal',props}),{});
   assert.deepEqual(f.sent,[]);
 });
+
+
+test('Claude persists actionable API diagnostics for completion and fork without delivering',async()=>{
+  for(const choice of ['session','mythos']){
+    const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('model '+choice);await f.command('on');
+    const failure=async()=>({isAnswered:false,reason:'api-error',status:400,error:'invalid_request'});
+    f.$.model.complete=failure;f.$.model.fork=failure;await f.run();
+    assert.match(f.logs.at(-1),/HTTP 400, invalid_request/);assert.deepEqual(f.suggested,[]);assert.deepEqual(f.sent,[]);
+    await f.command('status');assert.match(f.logs.at(-1),/^PAUSED/);assert.match(f.logs.at(-1),/HTTP 400/);
+  }
+});

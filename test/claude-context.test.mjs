@@ -16,3 +16,18 @@ test('completion result recognizes supported shapes and rejects failed or unknow
   assert.equal(completionText('old text'),'old text');assert.equal(completionText({isAnswered:true,text:'new text'}),'new text');
   for(const data of [null,{}, {isAnswered:false,text:'do not use'}, {text:'unknown shape'}])assert.throws(()=>completionText(data),/No fallback/);
 });
+
+
+test('Claude API failures retain status and classification without exposing response bodies',()=>{
+  for(const [status,error,expected] of [[400,'invalid_request',/model ID and effort/],[401,'authentication_failed',/authentication/],[429,'rate_limit',/rate limit/],[529,'overloaded',/service status/],[null,'unknown',/no HTTP status/]]){
+    assert.throws(()=>completionText({isAnswered:false,reason:'api-error',status,error,body:'SECRET',headers:{authorization:'SECRET'},text:'SECRET'}),e=>{
+      assert.ok(e.message.includes(error));assert.match(e.message,expected);assert.ok(!e.message.includes('SECRET'));return true;
+    });
+  }
+  assert.throws(()=>completionText({isAnswered:false,reason:'api-error',status:400,error:'SECRET body'}),/HTTP 400, unknown/);
+});
+test('fork failures preserve diagnostics and cannot pass error text as a prediction',()=>{
+  assert.equal(completionText({text:'legacy fork'},{legacyFork:true}),'legacy fork');
+  assert.throws(()=>completionText({isAnswered:false,reason:'api-error',status:403,error:'authentication_failed',text:'not a prediction'},{legacyFork:true}),/HTTP 403/);
+  assert.throws(()=>completionText({isAnswered:false,reason:'aborted'}),/cancelled or timed out/);
+});

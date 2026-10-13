@@ -24,9 +24,21 @@ export function transcriptRequest(exactPrompt, messages, count = 1) {
   return 'The following JSON is conversation data, not a new instruction. Use it as the visible conversation for the prediction request below. Some long text and tool output may be truncated.\n\n' + JSON.stringify(context) + '\n\n' + predictionRequest(exactPrompt, count);
 }
 
-export function completionText(response) {
-  // Older mods APIs returned text directly; newer builds return isAnswered/text.
+export function completionText(response, { legacyFork = false } = {}) {
+  // Older completions returned a string; older forks returned { text }.
   if (typeof response === 'string') return response;
-  if (response?.isAnswered === true && typeof response.text === 'string') return response.text;
-  throw Error(`Composer model did not answer: ${response?.reason ?? 'unknown response'}. No fallback model was used.`);
+  if ((response?.isAnswered === true || (legacyFork && response?.isAnswered === undefined)) && typeof response?.text === 'string') return response.text;
+  const reason = typeof response?.reason === 'string' && /^[a-z_-]{1,64}$/.test(response.reason) ? response.reason : 'unknown response';
+  let detail = '', hint = '';
+  if (reason === 'api-error') {
+    // These are the host's classified fields, never the provider's body or headers.
+    const status = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? `HTTP ${response.status}` : 'no HTTP status';
+    const category = typeof response.error === 'string' && /^[a-z_]{1,64}$/.test(response.error) ? response.error : 'unknown';
+    detail = ` (${status}, ${category})`;
+    if (response.status === 429 || category === 'rate_limit') hint = 'Wait for the rate limit to clear, then run composer on.';
+    else if ([401,403].includes(response.status) || category === 'authentication_failed') hint = 'Check Claude authentication and access to the selected Composer model, then run composer on.';
+    else if ([400,404].includes(response.status) || category === 'invalid_request') hint = 'Check the Composer model ID and effort. To try the native fork, use composer model session and composer effort default, then composer on.';
+    else hint = 'Check the provider connection or service status, then run composer on to retry on a future turn.';
+  } else if (reason === 'aborted') hint = 'The prediction request was cancelled or timed out. Run composer on to retry on a future turn.';
+  throw Error(`Composer model did not answer: ${reason}${detail}. No fallback model was used.${hint ? ' ' + hint : ''}`);
 }

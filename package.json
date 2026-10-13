@@ -1,6 +1,6 @@
 {
   "name": "codex-composer-autopilot",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Opt-in Composer predictions for selected Codex, Pi, and Claude Code sessions.",
   "type": "module",
   "bin": {

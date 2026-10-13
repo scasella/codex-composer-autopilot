@@ -90,7 +90,7 @@ export function register(on) {
               return completionText(await $.model.complete({ model, prompt, maxTokens: 4096, timeoutMs: 45000, ...(effort === 'default' ? {} : { effort }) }));
             }
             const response = await $.model.fork({ prompt: predictionRequest(exact, count) });
-            return response?.text ?? null;
+            return completionText(response, { legacyFork: true });
           },
           async suggest(text, valid, candidates) {
             const shown = (await $.prompt.suggest({ text })).isShown;

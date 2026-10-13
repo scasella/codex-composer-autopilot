@@ -210,6 +210,20 @@ Supported effort depends on the chosen model and provider. Pi uses its provider'
 normal reasoning mapping; Claude drops effort for models without effort support.
 A model error pauses predictions without silently switching models or effort.
 
+### Claude prediction API errors
+
+If Composer pauses with `api-error`, `/composer status` preserves the API's HTTP
+status and classified error category (v0.7.1 and later). The plugin does not log
+provider response bodies or credentials. A 429 points to rate limiting; 401/403
+to authentication or model access; 400/404 to a rejected request or model ID.
+A status alone does not identify the exact underlying cause.
+
+After resolving the error, run `/composer on` and complete another coding turn.
+To test the native conversation-fork path, use `/composer model session` and
+`/composer effort default`, then `/composer on`. This changes only Composer's
+prediction settings. Selecting `session` with an explicit effort still uses
+`model.complete`, so reset both to test the fork. No automatic fallback is used.
+
 ### Prompt and behavior
 
 Both integrations use the byte-exact **Composer prompt version 5** retrieved from

@@ -1,6 +1,6 @@
 {
   "name": "composer-autopilot",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Opt-in Composer predictions for all or selected Claude Code sessions.",
   "author": {
     "name": "scasella"
