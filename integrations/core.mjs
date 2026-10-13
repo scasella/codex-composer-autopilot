@@ -1,6 +1,6 @@
 // Shared, dependency-free policy. Host adapters own context, storage, and submission.
 export const HELP = 'composer on [here|all|SESSION_ID ...] | off [here|SESSION_ID ...] | status | sessions | mode suggest|auto | limit N';
-export const defaults = () => ({ version: 2, enabled: false, mode: 'selected', delivery: 'auto', sessions: [], exclude: [], limit: 10, revision: 'initial' });
+export const defaults = () => ({ version: 2, enabled: false, mode: 'selected', delivery: 'suggest', sessions: [], exclude: [], limit: 10, revision: 'initial' });
 export function sessionId(id) {
   if (typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/.test(id)) throw Error('Use a complete session ID from composer sessions.');
   return id;
@@ -10,7 +10,7 @@ export function validateConfig(c) {
     !Array.isArray(c.sessions) || !Array.isArray(c.exclude) || typeof c.revision !== 'string' ||
     !Number.isInteger(c.limit) || c.limit < 1 || c.limit > 1000) throw Error('Invalid Composer settings; restore a valid config before enabling.');
   if ((c.version === 2 || c.delivery !== undefined) && !['auto', 'suggest'].includes(c.delivery)) throw Error('Invalid Composer delivery mode.');
-  c.sessions.forEach(sessionId); c.exclude.forEach(sessionId); return { ...c, version: 2, delivery: c.delivery ?? 'auto' };
+  c.sessions.forEach(sessionId); c.exclude.forEach(sessionId); return { ...c, version: 2, delivery: c.delivery ?? 'suggest' };
 }
 export const targeted = (c, id) => c.enabled && !c.exclude.includes(id) && (c.mode === 'all' || c.sessions.includes(id));
 export function predictionRequest(exactPrompt) {

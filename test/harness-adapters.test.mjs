@@ -27,14 +27,14 @@ async function piFixture(t) {
   return {dir,hooks,ctx,event,sent,notes,run,key:data=>keyHandler?.(data),widget:()=>widget,draft:()=>draft,command:args=>command(args,ctx),setDraft:x=>{draft=x;},during:fn=>{during=fn;}};
 }
 test('Pi native boundary submits exact text without invoking commands or changing draft',async t=>{
-  const f=await piFixture(t);await f.command('on');await f.run();
+  const f=await piFixture(t);await f.command('mode auto');await f.command('on');await f.run();
   assert.deepEqual(f.sent,[{text:'Run the tests.',options:{deliverAs:'followUp',expandPromptTemplates:false}}]);
 });
 test('Pi never sends after OFF or user input during prediction',async t=>{
-  const f=await piFixture(t);await f.command('on');f.during(()=>f.command('off'));await f.run();assert.equal(f.sent.length,0);
+  const f=await piFixture(t);await f.command('mode auto');await f.command('on');f.during(()=>f.command('off'));await f.run();assert.equal(f.sent.length,0);
 });
 test('Pi skips drafts, aborted turns, and queued continuation',async t=>{
-  const f=await piFixture(t);await f.command('on');f.setDraft('mine');await f.run();f.setDraft('');
+  const f=await piFixture(t);await f.command('mode auto');await f.command('on');f.setDraft('mine');await f.run();f.setDraft('');
   f.event.outcome='aborted';await f.run();f.event.outcome='completed';f.event.context.pendingMessages=[{}];await f.run();assert.equal(f.sent.length,0);
 });
 function claudeFixture() {
@@ -51,25 +51,25 @@ function claudeFixture() {
     async run(event={}){await emit('turn.complete',{turnId:'turn-a',reason:'answer',isAborted:false,answer:'Done.',...event});const fn=timer;timer=undefined;if(fn)await fn();await settle();}};
 }
 test('Claude native adapter forks context and submits one user prompt',async()=>{
-  const f=claudeFixture();await f.emit('session.start');await f.command('on');await f.run();assert.deepEqual(f.sent,['Run the tests.']);
+  const f=claudeFixture();await f.emit('session.start');await f.command('mode auto');await f.command('on');await f.run();assert.deepEqual(f.sent,['Run the tests.']);
 });
 test('Claude OFF while fork is running cancels submission',async()=>{
-  const f=claudeFixture();await f.emit('session.start');await f.command('on');f.during(()=>f.command('off'));await f.run();assert.equal(f.sent.length,0);
+  const f=claudeFixture();await f.emit('session.start');await f.command('mode auto');await f.command('on');f.during(()=>f.command('off'));await f.run();assert.equal(f.sent.length,0);
 });
 test('Claude skips drafts, subagents, interrupted turns, and errors',async()=>{
-  const f=claudeFixture();await f.emit('session.start');await f.command('on');f.setDraft('mine');await f.run();f.setDraft('');
+  const f=claudeFixture();await f.emit('session.start');await f.command('mode auto');await f.command('on');f.setDraft('mine');await f.run();f.setDraft('');
   await f.run({isAborted:true});await f.run({agentId:'subagent'});await f.run({reason:'error'});assert.equal(f.sent.length,0);
 });
 test('Claude user typing during fork prevents submission',async()=>{
-  const f=claudeFixture();await f.emit('session.start');await f.command('on');f.during(()=>f.emit('prompt.edit',{text:'mine'}));await f.run();assert.equal(f.sent.length,0);
+  const f=claudeFixture();await f.emit('session.start');await f.command('mode auto');await f.command('on');f.during(()=>f.emit('prompt.edit',{text:'mine'}));await f.run();assert.equal(f.sent.length,0);
 });
 
 async function waitFor(check) {
   for (let n=0;n<200;n++) { if(check())return; await new Promise(r=>setTimeout(r,5)); }
   assert.ok(check(),'asynchronous Tab acceptance did not finish');
 }
-test('Pi suggestion previews without submission; Tab fills only the draft',async t=>{
-  const f=await piFixture(t);await f.command('mode suggest');await f.command('on');await f.run();
+test('Pi defaults to suggestion previews; Tab fills only the draft',async t=>{
+  const f=await piFixture(t);await f.command('on');await f.run();
   assert.match(f.widget()[0],/Run the tests/);assert.equal(f.draft(),'');assert.deepEqual(f.sent,[]);
   assert.deepEqual(f.key('\t'),{consume:true});await waitFor(()=>f.draft()!=='');
   assert.equal(f.draft(),'Run the tests.');assert.equal(f.widget(),undefined);assert.deepEqual(f.sent,[]);
@@ -103,8 +103,8 @@ test('suggest mode skips headless Pi sessions',async t=>{
   const f=await piFixture(t);f.ctx.hasUI=false;await f.command('mode suggest');await f.command('on');
   f.during(()=>assert.fail('headless session called the model'));await f.run();assert.deepEqual(f.sent,[]);assert.equal(f.widget(),undefined);
 });
-test('Claude suggest mode proposes native ghost text and never submits',async()=>{
-  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('mode suggest');await f.command('on');await f.run();
+test('Claude defaults to native ghost text and never submits',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('on');await f.run();
   assert.deepEqual(f.suggested,['Run the tests.']);assert.deepEqual(f.sent,[]);
 });
 test('Claude suggestion mode skips headless sessions and cancels on OFF or mode changes',async()=>{

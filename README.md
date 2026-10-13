@@ -50,15 +50,17 @@ releases with only shell hooks cannot run this integration.
 | `/composer status` | Show this session ID, scope, exclusions, limit, and last outcome |
 | `/composer sessions` | List sessions that have registered, including previously closed sessions |
 | `/composer mode suggest` | Show a suggestion for Tab to accept; never send it automatically |
-| `/composer mode auto` | Restore automatic sending |
+| `/composer mode auto` | Explicitly opt into automatic sending |
 | `/composer limit 10` | Set the maximum automatic follow-ups per session between human messages |
 
-For suggestion-only use, set the delivery mode and choose your target scope:
+Suggestion mode is the default. Choose your target scope:
 
 ```text
-/composer mode suggest
 /composer on all
 ```
+
+Use `/composer mode auto` to opt into automatic sending, or
+`/composer mode suggest` to return to Tab acceptance.
 
 Claude Code shows native dim text in the empty prompt box. Pi shows a
 “Tab to accept” preview above the editor. **Tab copies the suggestion into the
@@ -69,8 +71,10 @@ run in headless sessions and does not consume the automatic-follow-up limit.
 The exact prediction prompt is the same in both modes.
 
 Delivery mode applies to the saved target scope within this harness. Changing it
-does not enable a disabled plugin or change your selected sessions. Existing
-installations retain auto mode until you change it. New installations remain OFF.
+does not enable a disabled plugin or change your selected sessions. New installations remain OFF and default to suggestion mode when enabled.
+Legacy settings with no saved delivery choice also default to suggestions.
+An existing saved `auto` or `suggest` choice is preserved; use
+`/composer mode suggest` to change a saved auto setting.
 Switching mode cancels pending delivery; it does not retract already-submitted
 work. A native Claude suggestion already displayed may remain until the next edit
 or turn, but accepting it still requires your action and never sends it itself.

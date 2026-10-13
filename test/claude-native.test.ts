@@ -1,6 +1,6 @@
 import { test, expect, mock } from 'claude-code/testing';
 
-test('native mod loads, controls targets, forks, and submits exact prediction', async ($, on) => {
+test('native mod defaults to suggestions and sends only after explicit auto mode', async ($, on) => {
   const files = new Map<string,string>();
   const sent: string[] = [];
   const suggested: string[] = [];
@@ -28,8 +28,9 @@ test('native mod loads, controls targets, forks, and submits exact prediction', 
   await $.turn.complete({ turnId: 'turn-a', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
   await clock.advance(200);
   expect(logs.join('\n')).toMatch('ON for');
-  expect(sent).toEqual(['Run the tests.']);
-  await $.command.run({ command: 'composer', args: 'mode suggest', origin: { kind: 'composer' } });
+  expect(sent).toEqual([]);
+  expect(suggested).toEqual(['Run the tests.']);
+  await $.command.run({ command: 'composer', args: 'mode auto', origin: { kind: 'composer' } });
   await $.turn.complete({ turnId: 'turn-suggest', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
   await clock.advance(200);
   expect(suggested).toEqual(['Run the tests.']);
