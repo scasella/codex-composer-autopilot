@@ -3,6 +3,7 @@ import { test, expect, mock } from 'claude-code/testing';
 test('native mod loads, controls targets, forks, and submits exact prediction', async ($, on) => {
   const files = new Map<string,string>();
   const sent: string[] = [];
+  const suggested: string[] = [];
   const logs: string[] = [];
   const clock = mock.clock(on);
   mock.env(on, { HOME: '/test' });
@@ -20,12 +21,18 @@ test('native mod loads, controls targets, forks, and submits exact prediction', 
     expect(e.prompt).toStartWith('EXACT_TEST_PROMPT\n\n');
     return { value: { text: '{"suggestion":"Run the tests."}', usage: {} } };
   });
+  on('prompt.suggest', async (_$, e) => { suggested.push(e.text); return { isShown: true }; });
   on('prompt.submit', async (_$, e) => { sent.push(e.text); return { text: e.text }; });
   await $.session.start({ cwd: '/project', surface: 'terminal', isInteractive: true });
   await $.command.run({ command: 'composer', args: 'on all', origin: { kind: 'composer' } });
   await $.turn.complete({ turnId: 'turn-a', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
   await clock.advance(200);
   expect(logs.join('\n')).toMatch('ON for');
+  expect(sent).toEqual(['Run the tests.']);
+  await $.command.run({ command: 'composer', args: 'mode suggest', origin: { kind: 'composer' } });
+  await $.turn.complete({ turnId: 'turn-suggest', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
+  await clock.advance(200);
+  expect(suggested).toEqual(['Run the tests.']);
   expect(sent).toEqual(['Run the tests.']);
   await $.command.run({ command: 'composer', args: 'off', origin: { kind: 'composer' } });
   await $.turn.complete({ turnId: 'turn-b', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });

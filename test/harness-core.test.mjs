@@ -73,3 +73,29 @@ test('corrupt config and session state fail closed', async () => {
 test('duplicate concurrent event calls make one prediction', async () => {
   const f=fixture(); await f.a.command('on all',id,'/a'); await Promise.all([f.run(),f.run()]); assert.equal(f.sent.length,1);
 });
+
+test('suggest mode preserves scope, stays off until enabled, and never consumes the auto limit',async()=>{
+  const f=fixture(),suggestions=[];await f.a.command('mode suggest',id,'/a');await f.run();assert.equal(f.predicted.length,0);
+  await f.a.command('on all',id,'/a');await f.a.command('limit 1',id,'/a');
+  const suggest=async text=>{suggestions.push(text);return true;};
+  await f.run(f.a,{suggest});await f.run(f.b,{id:other,suggest});await f.run(f.a,{suggest});
+  assert.equal(suggestions.length,3);assert.deepEqual(f.sent,[]);assert.equal(f.values.get('session-'+id).count,0);
+  assert.equal(f.values.get('session-'+id).status,'suggested');assert.match(await f.a.command('status',id,'/a'),/Delivery: suggest/);
+});
+test('retained suggestion guard checks configuration and source at acceptance time',async()=>{
+  const f=fixture();let valid,current=true;await f.a.command('mode suggest',id,'/a');await f.a.command('on all',id,'/a');
+  await f.run(f.a,{current:()=>current,suggest:async(_text,guard)=>{valid=guard;}});assert.equal(await valid(),true);
+  current=false;assert.equal(await valid(),false);current=true;await f.b.command('mode auto',other,'/b');assert.equal(await valid(),false);
+  assert.deepEqual(f.sent,[]);
+});
+test('legacy configs keep auto mode; invalid delivery mode fails closed',async()=>{
+  const f=fixture();await f.a.command('on',id,'/a');const c=await f.store.get('config');delete c.delivery;c.version=1;await f.store.set('config',c);
+  await f.run();assert.equal(f.sent.length,1);await f.store.set('config',{...c,delivery:'unknown'});
+  await assert.rejects(f.run(),/delivery/);assert.equal(f.sent.length,1);
+});
+
+test('changing delivery upgrades config so older auto-only plugins refuse it',async()=>{
+  const f=fixture();await f.a.command('mode suggest',id,'/a');
+  const c=await f.store.get('config');assert.equal(c.version,2);delete c.delivery;await f.store.set('config',c);
+  await assert.rejects(f.run(),/delivery/);
+});

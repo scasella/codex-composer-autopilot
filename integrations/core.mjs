@@ -1,15 +1,16 @@
 // Shared, dependency-free policy. Host adapters own context, storage, and submission.
-export const HELP = 'composer on [here|all|SESSION_ID ...] | off [here|SESSION_ID ...] | status | sessions | limit N';
-export const defaults = () => ({ version: 1, enabled: false, mode: 'selected', sessions: [], exclude: [], limit: 10, revision: 'initial' });
+export const HELP = 'composer on [here|all|SESSION_ID ...] | off [here|SESSION_ID ...] | status | sessions | mode suggest|auto | limit N';
+export const defaults = () => ({ version: 2, enabled: false, mode: 'selected', delivery: 'auto', sessions: [], exclude: [], limit: 10, revision: 'initial' });
 export function sessionId(id) {
   if (typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}$/.test(id)) throw Error('Use a complete session ID from composer sessions.');
   return id;
 }
 export function validateConfig(c) {
-  if (!c || c.version !== 1 || typeof c.enabled !== 'boolean' || !['selected', 'all'].includes(c.mode) ||
+  if (!c || ![1, 2].includes(c.version) || typeof c.enabled !== 'boolean' || !['selected', 'all'].includes(c.mode) ||
     !Array.isArray(c.sessions) || !Array.isArray(c.exclude) || typeof c.revision !== 'string' ||
     !Number.isInteger(c.limit) || c.limit < 1 || c.limit > 1000) throw Error('Invalid Composer settings; restore a valid config before enabling.');
-  c.sessions.forEach(sessionId); c.exclude.forEach(sessionId); return c;
+  if ((c.version === 2 || c.delivery !== undefined) && !['auto', 'suggest'].includes(c.delivery)) throw Error('Invalid Composer delivery mode.');
+  c.sessions.forEach(sessionId); c.exclude.forEach(sessionId); return { ...c, version: 2, delivery: c.delivery ?? 'auto' };
 }
 export const targeted = (c, id) => c.enabled && !c.exclude.includes(id) && (c.mode === 'all' || c.sessions.includes(id));
 export function predictionRequest(exactPrompt) {
@@ -30,7 +31,7 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
   async function read(id) {
     const s = (await store.get(recordKey(id))) ?? { id, count: 0, source: null, status: 'idle' };
     if (s.id !== id || !Number.isInteger(s.count) || s.count < 0 ||
-      !['idle', 'predicting', 'reserved', 'submitted', 'cancelled', 'abstained', 'halted'].includes(s.status)) throw Error('Invalid session state; automatic sending stopped.');
+      !['idle', 'predicting', 'reserved', 'submitted', 'suggested', 'cancelled', 'abstained', 'halted'].includes(s.status)) throw Error('Invalid session state; automatic sending stopped.');
     return s;
   }
   async function register(id, cwd) {
@@ -47,8 +48,8 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
     }
     if (action === 'status') {
       const state = await read(id);
-      const paused = state.revision === c.revision && (state.status === 'halted' || state.count >= c.limit);
-      return `${!targeted(c, id) ? 'OFF' : paused ? 'PAUSED' : 'ON'} for ${id}\nScope: ${c.mode === 'all' ? 'all loaded sessions' : c.sessions.join(', ') || 'none'}\nExcluded: ${c.exclude.join(', ') || 'none'}\nLimit: ${c.limit} automatic follow-ups per session between user messages.\nLast: ${state.status}${state.error ? ' — ' + state.error : ''}`;
+      const paused = state.revision === c.revision && (state.status === 'halted' || (c.delivery === 'auto' && state.count >= c.limit));
+      return `${!targeted(c, id) ? 'OFF' : paused ? 'PAUSED' : 'ON'} for ${id}\nDelivery: ${c.delivery === 'suggest' ? 'suggest — Tab to accept, Enter to send' : 'auto — send automatically'}\nScope: ${c.mode === 'all' ? 'all loaded sessions' : c.sessions.join(', ') || 'none'}\nExcluded: ${c.exclude.join(', ') || 'none'}\nLimit: ${c.limit} automatic follow-ups per session between user messages.\nLast: ${state.status}${state.error ? ' — ' + state.error : ''}`;
     }
     const ids = targets.map(x => x === 'here' ? id : x);
     if (action === 'on') {
@@ -61,7 +62,8 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
     } else if (action === 'off') {
       if (!ids.length || (ids.length === 1 && ids[0] === 'all')) c.enabled = false;
       else c.exclude = [...new Set([...c.exclude, ...ids.map(sessionId)])];
-    } else if (action === 'limit' && ids.length === 1) c.limit = Number(ids[0]);
+    } else if (action === 'mode' && ids.length === 1 && ['auto', 'suggest'].includes(ids[0])) c.delivery = ids[0];
+    else if (action === 'limit' && ids.length === 1) c.limit = Number(ids[0]);
     else throw Error(HELP);
     c.revision = nonce(); validateConfig(c); await store.set('config', c);
     await register(id, cwd);
@@ -70,16 +72,16 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
   async function human(id) {
     const s = await read(id); await store.set(recordKey(id), { ...s, count: 0 });
   }
-  async function run({ id, source, cwd, current, predict, submit }) {
+  async function run({ id, source, cwd, current, predict, submit, suggest, supportsSuggestions = true }) {
     if (busy || !source) return;
     busy = true;
     let state, revision;
     try {
       const c = await config(); revision = c.revision;
-      if (!targeted(c, id) || !await current()) return;
+      if (!targeted(c, id) || (c.delivery === 'suggest' && !supportsSuggestions) || !await current()) return;
       state = await read(id);
       if (state.revision !== revision) state = { ...state, revision, count: 0, error: undefined, status: 'idle' };
-      if (state.source === source || state.status === 'halted' || state.count >= c.limit) return;
+      if (state.source === source || state.status === 'halted' || (c.delivery === 'auto' && state.count >= c.limit)) return;
       state = { ...state, id, source, cwd, status: 'predicting', updatedAt: Date.now() };
       // Reserve before the model call; reloads and ambiguous submissions never replay this source.
       await store.set(recordKey(id), state);
@@ -90,11 +92,18 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
       if (latest.revision !== revision || !targeted(latest, id) || !await current()) state.status = 'cancelled';
       else if (text === null) state.status = 'abstained';
       else {
-        state = { ...state, count: state.count + 1, status: 'reserved' };
+        state = { ...state, count: state.count + (c.delivery === 'auto' ? 1 : 0), status: 'reserved' };
         await store.set(recordKey(id), state);
         const final = await config();
         if (final.revision !== revision || !targeted(final, id) || !await current()) state.status = 'cancelled';
-        else { await submit(text); state.status = 'submitted'; }
+        else if (c.delivery === 'suggest') {
+          // The adapter may retain this guard until the user presses Tab.
+          const valid = async () => {
+            const now = await config();
+            return now.revision === revision && targeted(now, id) && now.delivery === 'suggest' && await current();
+          };
+          state.status = await suggest(text, valid) === false ? 'cancelled' : 'suggested';
+        } else { await submit(text); state.status = 'submitted'; }
       }
       await store.set(recordKey(id), { ...state, updatedAt: Date.now() });
     } catch (e) {

@@ -16,12 +16,12 @@ async function makeControl($) {
 import { createController, predictionRequest, HELP } from '../integrations/core.mjs';
 
 export function register(on) {
-  let control, epoch = 0, running = null, queued = 0, lastTurn = null, timer;
+  let control, epoch = 0, running = null, queued = 0, lastTurn = null, timer, interactive = false;
   const cancel = () => { epoch++; timer?.cancel(); timer = undefined; };
   on('session.start', async ($, e, next) => {
-    cancel();
+    cancel(); interactive = e.isInteractive === true;
     await ((control ??= await makeControl($))).register(await $.session.id(), await $.session.cwd());
-    await $.command.register({ name: 'composer', description: HELP, argumentHint: 'on|off|status|sessions', immediate: true });
+    await $.command.register({ name: 'composer', description: HELP, argumentHint: 'on|off|mode suggest|auto|status|sessions', immediate: true });
     return next(e);
   });
   on('command.run', { command: 'composer' }, async ($, e) => {
@@ -53,12 +53,13 @@ export function register(on) {
         const id = await $.session.id(), cwd = await $.session.cwd();
         const current = async () => generation === epoch && !running && !queued && lastTurn === e.turnId &&
           await $.session.id() === id && !(await $.prompt.read()).text.trim();
-        await ((control ??= await makeControl($))).run({ id, source: e.turnId, cwd, current,
+        await ((control ??= await makeControl($))).run({ id, source: e.turnId, cwd, current, supportsSuggestions: interactive,
           async predict() {
             const exact = await $.fs.read(`${$.plugin.root}/prompts/composer-v5.txt`);
             const response = await $.model.fork({ prompt: predictionRequest(exact) });
             return response?.text ?? null;
           },
+          async suggest(text) { return (await $.prompt.suggest({ text })).isShown; },
           async submit(text) {
             const response = await $.prompt.submit({ text });
             if (response.drop) throw Error(`Submission refused: ${response.drop}`);

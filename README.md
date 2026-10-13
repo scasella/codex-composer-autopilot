@@ -1,8 +1,9 @@
 # Composer Autopilot
 
-Automatically generate and send a suggested next user message in **all loaded
-sessions or only the sessions you choose**. Supports Codex desktop, Pi, and
-Claude Code, without switching windows or sending keyboard events.
+Generate suggested next user messages in **all loaded sessions or only the
+sessions you choose**. Pi and Claude Code offer Tab-to-accept suggestions or
+automatic sending. Codex desktop offers automatic sending. No window switching
+or synthetic keyboard events.
 
 **Zero npm dependencies, no build step, no MCP server, no telemetry.** Each harness
 is off until explicitly enabled and has its own independent settings.
@@ -48,7 +49,38 @@ releases with only shell hooks cannot run this integration.
 | `/composer off here` or `/composer off ID` | Persistently exclude these sessions |
 | `/composer status` | Show this session ID, scope, exclusions, limit, and last outcome |
 | `/composer sessions` | List sessions that have registered, including previously closed sessions |
+| `/composer mode suggest` | Show a suggestion for Tab to accept; never send it automatically |
+| `/composer mode auto` | Restore automatic sending |
 | `/composer limit 10` | Set the maximum automatic follow-ups per session between human messages |
+
+For suggestion-only use, set the delivery mode and choose your target scope:
+
+```text
+/composer mode suggest
+/composer on all
+```
+
+Claude Code shows native dim text in the empty prompt box. Pi shows a
+“Tab to accept” preview above the editor. **Tab copies the suggestion into the
+draft; Enter sends it only when you press it.** You can edit or ignore the draft.
+Pi's preview disappears on typing, Escape, a session change, or another command;
+normal Tab behavior is preserved when there is no preview. Suggest mode does not
+run in headless sessions and does not consume the automatic-follow-up limit.
+The exact prediction prompt is the same in both modes.
+
+Delivery mode applies to the saved target scope within this harness. Changing it
+does not enable a disabled plugin or change your selected sessions. Existing
+installations retain auto mode until you change it. New installations remain OFF.
+Switching mode cancels pending delivery; it does not retract already-submitted
+work. A native Claude suggestion already displayed may remain until the next edit
+or turn, but accepting it still requires your action and never sends it itself.
+
+**Upgrade:** update/reload every loaded instance before using the new setting.
+The first settings change writes config version 2, which older auto-only plugins
+reject rather than continuing automatic sending. Pi: `pi update git:github.com/scasella/codex-composer-autopilot` then `/reload`.
+Claude Code: `claude plugin marketplace update scasella-composer-autopilot`,
+`claude plugin update composer-autopilot@scasella-composer-autopilot`, then start a
+new session. This update does not change Codex desktop behavior.
 
 `on ID` removes that ID from exclusions. `on all` preserves them. Settings are
 shared across local processes of the same harness; Pi commands do not change
@@ -90,7 +122,7 @@ The integrations check targeting again before submission and skip nonempty text
 drafts, pending continuations, interrupted turns, and stale contexts. Typing or
 switching sessions cancels pending work. Draft checks use the host's text API;
 they cannot inspect attachment-only drafts. A durable reservation prevents replay
-of the same completed turn after a reload. Native submission needs no foreground
+of the same completed turn after a reload. Native submission and suggestion display need no foreground
 focus. OFF prevents a pending prediction from submitting; it cannot recall a
 prompt already handed to the host or stop a running agent turn. Ordinary harness
 permission controls still apply.
