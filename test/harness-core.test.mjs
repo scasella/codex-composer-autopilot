@@ -205,3 +205,16 @@ test('cache usage is retained for discarded or invalid predictions without enabl
   await assert.rejects(f.run(f.a,{predict:async(_m,_e,_n,usage)=>{usage({read:0,write:100});return 'bad json';}}));
   assert.match(await f.b.command('status',id,'/a'),/no hit reported; read 0, wrote 100 tokens/);
 });
+
+
+test('one-shot suggestions do not change automatic reservations, limits, failures or settings',async()=>{
+  const f=fixture();await f.a.command('mode auto',id,'/project');await f.a.command('on all',id,'/project');await f.a.command('off here',id,'/project');
+  const state={id,count:10,source:'reserved-turn',status:'halted',revision:f.values.get('config').revision,error:'prior failure'};
+  await f.store.set('session-'+id,state);const config=structuredClone(f.values.get('config'));
+  let valid;
+  await f.run(f.a,{once:true,source:null,predict:async(_m,_e,count,usage)=>{assert.equal(count,1);usage({read:500,write:0});return '{"suggestion":"Review the diff."}';},suggest:async(_text,guard)=>{valid=guard;return true;}});
+  assert.equal(await valid(),true);assert.deepEqual(f.values.get('config'),config);assert.deepEqual(f.values.get('session-'+id),state);assert.deepEqual(f.sent,[]);
+  await f.a.register(id,'/project'); // A reload must not hide the last manual request.
+  assert.match(await f.a.command('status',id,'/project'),/Last: one-shot suggested/);assert.match(await f.a.command('status',id,'/project'),/hit; read 500/);
+  await f.b.command('off',other,'/project');assert.equal(await valid(),false);
+});

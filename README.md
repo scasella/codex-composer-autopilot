@@ -109,6 +109,32 @@ given session ID. State lives in `~/.pi/agent/composer-autopilot` and
 text. A submission marked `submitted` means the native host accepted it, not that
 the resulting coding task succeeded.
 
+### Ask once in Claude Code
+
+For on-demand autocomplete, keep automatic Composer OFF and invoke it when you
+want a suggestion:
+
+```text
+/composer off
+/composer once
+```
+
+`/composer once` requests one batch using your saved Composer model, effort and
+suggestion count. It works in the current idle interactive session, including a
+resumed conversation, without waiting for another completed coding turn. It uses
+the same Tab autocomplete and multi-candidate picker described below. It **never
+sends a message**, even when your saved delivery mode is `auto`.
+
+No enablement, targeting, exclusions, automatic counters or replay reservations
+change. You can invoke it again on the same conversation, including after a failed
+prediction. Existing automatic behavior continues if you leave it ON; use
+`/composer off` for manual-only use. The command reports whether suggestions were
+shown, the model abstained, the host refused display, or the request failed. If you
+type, start a turn, change settings or close the session while it runs, its result
+is discarded. A still-running prediction must finish before another can start.
+`/composer status` includes the last one-shot outcome and reported cache usage.
+This command is currently available in Claude Code only.
+
 ### Browse multiple suggestions
 
 ```text
@@ -254,7 +280,8 @@ provider response bodies or credentials. A 429 points to rate limiting; 401/403
 to authentication or model access; 400/404 to a rejected request or model ID.
 A status alone does not identify the exact underlying cause.
 
-After resolving the error, run `/composer on` and complete another coding turn.
+After resolving the error, run `/composer once` in Claude Code to try again now,
+or run `/composer on` and complete another coding turn for automatic predictions.
 To test the native conversation-fork path, use `/composer model session` and
 `/composer effort default`, then `/composer on`. This changes only Composer's
 prediction settings. Selecting `session` with an explicit effort still uses

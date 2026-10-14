@@ -79,8 +79,10 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
     }
     if (action === 'status' || (['model', 'effort', 'suggestions'].includes(action) && !targets.length)) {
       const state = await read(id);
+      const manual = await store.get(`once-${id}`);
+      const last = manual && manual.updatedAt >= (state.predictionAt ?? 0) ? manual : state;
       const paused = state.revision === c.revision && (state.status === 'halted' || (c.delivery === 'auto' && state.count >= c.limit));
-      return `${!targeted(c, id) ? 'OFF' : paused ? 'PAUSED' : 'ON'} for ${id}\nDelivery: ${c.delivery === 'suggest' ? 'suggest — Tab to accept, Enter to send' : 'auto — send automatically'}\nComposer model: ${c.predictionModel === 'session' ? 'session (coding model)' : c.predictionModel}\nComposer effort: ${c.predictionEffort}\nSuggestions: ${c.suggestionCount} (auto mode always uses one)\nScope: ${c.mode === 'all' ? 'all loaded sessions' : c.sessions.join(', ') || 'none'}\nExcluded: ${c.exclude.join(', ') || 'none'}\nLimit: ${c.limit} automatic follow-ups per session between user messages.\nCache (last prediction): ${cacheStatus(state.cache)}\nLast: ${state.status}${state.error ? ' — ' + state.error : ''}`;
+      return `${!targeted(c, id) ? 'OFF' : paused ? 'PAUSED' : 'ON'} for ${id}\nDelivery: ${c.delivery === 'suggest' ? 'suggest — Tab to accept, Enter to send' : 'auto — send automatically'}\nComposer model: ${c.predictionModel === 'session' ? 'session (coding model)' : c.predictionModel}\nComposer effort: ${c.predictionEffort}\nSuggestions: ${c.suggestionCount} (auto mode always uses one)\nScope: ${c.mode === 'all' ? 'all loaded sessions' : c.sessions.join(', ') || 'none'}\nExcluded: ${c.exclude.join(', ') || 'none'}\nLimit: ${c.limit} automatic follow-ups per session between user messages.\nCache (last prediction): ${cacheStatus(last.cache)}\nLast: ${last === manual ? 'one-shot ' : ''}${last.status}${last.error ? ' — ' + last.error : ''}`;
     }
     const ids = targets.map(x => x === 'here' ? id : x);
     if (action === 'on') {
@@ -106,43 +108,47 @@ export function createController(store, nonce = () => crypto.randomUUID()) {
   async function human(id) {
     const s = await read(id); await store.set(recordKey(id), { ...s, count: 0 });
   }
-  async function run({ id, source, cwd, current, predict, submit, suggest, supportsSuggestions = true }) {
-    if (busy || !source) return;
+  async function run({ id, source, cwd, current, predict, submit, suggest, supportsSuggestions = true, once = false }) {
+    if (busy) return 'busy';
+    if (!source && !once) return;
+    const key = once ? `once-${sessionId(id)}` : recordKey(id);
     busy = true;
     let state, revision;
     try {
       const c = await config(); revision = c.revision;
-      if (!targeted(c, id) || (c.delivery === 'suggest' && !supportsSuggestions) || !await current()) return;
-      state = await read(id);
+      if (once) c.delivery = 'suggest';
+      if ((!once && !targeted(c, id)) || (c.delivery === 'suggest' && !supportsSuggestions) || !await current()) return 'unavailable';
+      state = once ? { id, count: 0, status: 'idle' } : await read(id);
       if (state.revision !== revision) state = { ...state, revision, count: 0, error: undefined, status: 'idle' };
-      if (state.source === source || state.status === 'halted' || (c.delivery === 'auto' && state.count >= c.limit)) return;
-      state = { ...state, id, source, cwd, status: 'predicting', cache: null, updatedAt: Date.now() };
+      if (!once && (state.source === source || state.status === 'halted' || (c.delivery === 'auto' && state.count >= c.limit))) return;
+      state = { ...state, id, source, cwd, status: 'predicting', cache: null, predictionAt: Date.now(), updatedAt: Date.now() };
       // Reserve before the model call; reloads and ambiguous submissions never replay this source.
-      await store.set(recordKey(id), state);
+      await store.set(key, state);
       const count = c.delivery === 'suggest' ? c.suggestionCount : 1;
       const raw = await predict(c.predictionModel, c.predictionEffort, count, usage => { state.cache = cacheUsage(usage); });
-      if (raw === null) throw Error('Prediction model did not answer. Run composer on to retry on a future turn.');
+      if (raw === null) throw Error(once ? 'Prediction model did not answer. Run composer once to retry.' : 'Prediction model did not answer. Run composer on to retry on a future turn.');
       const candidates = parseSuggestions(raw, count), text = candidates[0];
       const latest = await config();
-      if (latest.revision !== revision || !targeted(latest, id) || !await current()) state.status = 'cancelled';
+      if (latest.revision !== revision || (!once && !targeted(latest, id)) || !await current()) state.status = 'cancelled';
       else if (!candidates.length) state.status = 'abstained';
       else {
         state = { ...state, count: state.count + (c.delivery === 'auto' ? 1 : 0), status: 'reserved' };
-        await store.set(recordKey(id), state);
+        await store.set(key, state);
         const final = await config();
-        if (final.revision !== revision || !targeted(final, id) || !await current()) state.status = 'cancelled';
+        if (final.revision !== revision || (!once && !targeted(final, id)) || !await current()) state.status = 'cancelled';
         else if (c.delivery === 'suggest') {
           // The adapter may retain this guard until the user presses Tab.
           const valid = async () => {
             const now = await config();
-            return now.revision === revision && targeted(now, id) && now.delivery === 'suggest' && await current();
+            return now.revision === revision && (once || (targeted(now, id) && now.delivery === 'suggest')) && await current();
           };
           state.status = await suggest(text, valid, candidates) === false ? 'cancelled' : 'suggested';
         } else { await submit(text); state.status = 'submitted'; }
       }
-      await store.set(recordKey(id), { ...state, updatedAt: Date.now() });
+      await store.set(key, { ...state, updatedAt: Date.now() });
+      return state.status;
     } catch (e) {
-      if (state) await store.set(recordKey(id), { ...state, revision, status: 'halted', error: String(e), updatedAt: Date.now() });
+      if (state) await store.set(key, { ...state, revision, status: 'halted', error: String(e), updatedAt: Date.now() });
       throw e;
     } finally { busy = false; }
   }

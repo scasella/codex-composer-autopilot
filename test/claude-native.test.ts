@@ -84,4 +84,24 @@ test('native mod defaults to suggestions and sends only after explicit auto mode
   await $.turn.complete({ turnId: 'turn-b', reason: 'answer', isAborted: false, answer: 'Done.', durationMs: 1 });
   await clock.advance(200);
   expect(sent).toEqual(['Run the tests.']);
+  // Explicit invocation works while OFF, including after a fresh/resumed session start.
+  await $.session.start({ cwd: '/project', surface: 'terminal', isInteractive: true });
+  const config = files.get('/test/.claude/composer-autopilot/config.json');
+  const before = suggested.length;
+  await $.command.run({ command: 'composer', args: 'once', origin: { kind: 'composer' } });
+  await clock.advance(200);
+  expect(suggested.length).toBe(before + 1);
+  expect(logs.at(-1)).toMatch('suggestions ready');
+  const picker = await $.ui.mount({ plugin: 'composer-autopilot', surface: 'terminal', component: 'AbovePrompt', props: {
+    hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100,
+    scroll: { offset: 0, bodyRows: 10 }, view: {}
+  } });
+  await picker.select({ key: 'composer-candidates', value: '2' });
+  expect(suggested.at(-1)).toBe('Commit the change.');
+  await picker.unmount();
+  expect(files.get('/test/.claude/composer-autopilot/config.json')).toBe(config);
+  expect(sent).toEqual(['Run the tests.']);
+  await $.command.run({ command: 'composer', args: 'status', origin: { kind: 'composer' } });
+  expect(logs.at(-1)).toMatch('OFF for');
+  expect(logs.at(-1)).toMatch('Last: one-shot suggested');
 });

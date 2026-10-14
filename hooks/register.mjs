@@ -16,17 +16,75 @@ async function makeControl($) {
 import { createController, predictionRequest, HELP } from '../integrations/core.mjs';
 import { transcriptRequest, completionText } from '../integrations/claude-context.mjs';
 
+async function predict($, choice, effort, count, reportUsage) {
+  const exact = await $.fs.read(`${$.plugin.root}/prompts/composer-v5.txt`);
+  if (choice !== 'session' || effort !== 'default') {
+    const model = choice === 'session' ? await $.session.model() : choice;
+    if (typeof model !== 'string' || !model.trim()) throw Error('Unable to resolve the Composer model.');
+    const prompt = transcriptRequest(exact, await $.session.messages(), count);
+    const response = await $.model.complete({ model, prompt, maxTokens: 4096, timeoutMs: 45000, ...(effort === 'default' ? {} : { effort }) });
+    reportUsage({ read: response?.usage?.cache_read_input_tokens, write: response?.usage?.cache_creation_input_tokens });
+    return completionText(response);
+  }
+  const response = await $.model.fork({ prompt: predictionRequest(exact, count) });
+  reportUsage({ read: response?.usage?.cache_read_input_tokens, write: response?.usage?.cache_creation_input_tokens });
+  return completionText(response, { legacyFork: true });
+}
+
+async function generate($, control, { source, once, interactive, current, retain }) {
+  const id = await $.session.id(), cwd = await $.session.cwd();
+  const valid = async () => current() && await $.session.id() === id && !(await $.prompt.read()).text.trim();
+  return control.run({ id, source, once, cwd, current: valid, supportsSuggestions: interactive,
+    predict: (choice, effort, count, reportUsage) => predict($, choice, effort, count, reportUsage),
+    async suggest(text, valid, candidates) {
+      const shown = (await $.prompt.suggest({ text })).isShown;
+      if (shown && candidates.length > 1 && await valid()) retain(candidates, valid);
+      return shown;
+    },
+    async submit(text) {
+      const response = await $.prompt.submit({ text });
+      if (response.drop) throw Error(`Submission refused: ${response.drop}`);
+    }
+  });
+}
+
 export function register(on) {
   let control, epoch = 0, running = null, queued = 0, lastTurn = null, timer, interactive = false, offer, redraw = () => {};
   const cancel = () => { epoch++; timer?.cancel(); timer = undefined; if (offer) { offer = undefined; redraw(); } };
+  const options = (source, generation, once = false) => ({
+    source, once, interactive,
+    current: () => generation === epoch && !running && !queued && lastTurn === source,
+    retain(candidates, valid) { offer = { candidates, index: 0, valid }; redraw(); }
+  });
   on('session.start', async ($, e, next) => {
     cancel(); redraw = () => $.ui.invalidate('ui.render'); interactive = e.isInteractive === true;
     await ((control ??= await makeControl($))).register(await $.session.id(), await $.session.cwd());
-    await $.command.register({ name: 'composer', description: HELP, argumentHint: 'on|off|mode|model|models|effort|suggestions|status|sessions', immediate: true });
+    await $.command.register({ name: 'composer', description: 'composer once | ' + HELP, argumentHint: 'once|on|off|mode|model|models|effort|suggestions|status|sessions', immediate: true });
     return next(e);
   });
   on('command.run', { command: 'composer' }, async ($, e) => {
     cancel();
+    if (e.args.trim() === 'once') {
+      if (!interactive || running || queued) {
+        await $.ui.log('Composer once needs an idle interactive session. Try again after the coding turn finishes.');
+        return {};
+      }
+      const generation = epoch, source = lastTurn;
+      await $.ui.log('Composer: generating suggestions once…');
+      // Return control to the empty prompt before displaying the native autocomplete.
+      timer = $.clock.after(100, async () => {
+        try {
+          const status = await generate($, (control ??= await makeControl($)), options(source, generation, true));
+          await $.ui.log({ suggested: 'Composer: suggestions ready — Tab to accept, Enter to send.',
+            abstained: 'Composer: no grounded next message to suggest.',
+            busy: 'Composer: a prediction is still running. Try /composer once again when it finishes.',
+            cancelled: 'Composer: suggestion cancelled or the prompt could not display it. Run /composer once to retry.',
+            unavailable: 'Composer: suggestion skipped because the session or prompt changed. Run /composer once when idle.'
+          }[status] ?? 'Composer: no suggestion generated.');
+        } catch (error) { await $.ui.log(`Composer once failed: ${String(error)}`); }
+      });
+      return {};
+    }
     if (e.args.trim() === 'models') {
       await $.ui.log('session (coding model)\nhaiku\nsonnet\nopus\nOr a full Claude model ID supported by your provider. Availability is checked by Claude when predicting.');
       return {};
@@ -77,34 +135,7 @@ export function register(on) {
     // Let the host finish settlement; no foreground or prompt-box writes.
     timer = $.clock.after(100, async () => {
       try {
-        const id = await $.session.id(), cwd = await $.session.cwd();
-        const current = async () => generation === epoch && !running && !queued && lastTurn === e.turnId &&
-          await $.session.id() === id && !(await $.prompt.read()).text.trim();
-        await ((control ??= await makeControl($))).run({ id, source: e.turnId, cwd, current, supportsSuggestions: interactive,
-          async predict(choice, effort, count, reportUsage) {
-            const exact = await $.fs.read(`${$.plugin.root}/prompts/composer-v5.txt`);
-            if (choice !== 'session' || effort !== 'default') {
-              const model = choice === 'session' ? await $.session.model() : choice;
-              if (typeof model !== 'string' || !model.trim()) throw Error('Unable to resolve the Composer model.');
-              const prompt = transcriptRequest(exact, await $.session.messages(), count);
-              const response = await $.model.complete({ model, prompt, maxTokens: 4096, timeoutMs: 45000, ...(effort === 'default' ? {} : { effort }) });
-              reportUsage({ read: response?.usage?.cache_read_input_tokens, write: response?.usage?.cache_creation_input_tokens });
-              return completionText(response);
-            }
-            const response = await $.model.fork({ prompt: predictionRequest(exact, count) });
-            reportUsage({ read: response?.usage?.cache_read_input_tokens, write: response?.usage?.cache_creation_input_tokens });
-            return completionText(response, { legacyFork: true });
-          },
-          async suggest(text, valid, candidates) {
-            const shown = (await $.prompt.suggest({ text })).isShown;
-            if (shown && candidates.length > 1 && await valid()) { offer = { candidates, index: 0, valid }; redraw(); }
-            return shown;
-          },
-          async submit(text) {
-            const response = await $.prompt.submit({ text });
-            if (response.drop) throw Error(`Submission refused: ${response.drop}`);
-          }
-        });
+        await generate($, (control ??= await makeControl($)), options(e.turnId, generation));
       } catch (error) { await $.ui.log(`Composer paused: ${String(error)}`); }
     });
     return result;

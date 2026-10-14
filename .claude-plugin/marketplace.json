@@ -8,7 +8,7 @@
       "name": "composer-autopilot",
       "source": "./",
       "description": "Opt-in Composer predictions for all or selected Claude Code sessions.",
-      "version": "0.8.0"
+      "version": "0.9.0"
     }
   ],
   "metadata": {

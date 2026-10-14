@@ -49,6 +49,7 @@ function claudeFixture() {
     prompt:{read:async()=>({text:draft}),suggest:async({text})=>{suggested.push(text);return{isShown:true};},submit:async({text})=>{sent.push(text);return{text};}}};
   const next=async()=>({});const emit=(name,event={})=>hooks.get(name)($,event,next);
   return {$,sent,suggested,logs,requests,emit,response:x=>{response=x;},during:fn=>{during=fn;},setDraft:s=>{draft=s;},command:args=>emit('command.run',{args}),
+    async flush(){const fn=timer;timer=undefined;if(fn)await fn();await settle();},
     async run(event={}){await emit('turn.complete',{turnId:'turn-a',reason:'answer',isAborted:false,answer:'Done.',...event});const fn=timer;timer=undefined;if(fn)await fn();await settle();}};
 }
 test('Claude native adapter forks context and submits one user prompt',async()=>{
@@ -232,4 +233,53 @@ test('Claude complete and fork cache usage survives through status; missing usag
     f.$.model.complete=response;f.$.model.fork=response;await f.run();await f.command('status');assert.match(f.logs.at(-1),/hit; read 4096, wrote 256 tokens/);
     f.$.model.complete=f.$.model.fork=async()=>({isAnswered:true,text:'{"suggestion":null}'});await f.run({turnId:'next'});await f.command('status');assert.match(f.logs.at(-1),/unavailable \(provider did not report cache usage\)/);
   }
+});
+
+
+test('Claude once works while OFF without a turn event, preserves model/effort/count and native picker',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});
+  await f.command('model opus');await f.command('effort medium');await f.command('suggestions 3');
+  const config=await f.$.fs.read('/home/test/.claude/composer-autopilot/config.json');
+  f.response('{"suggestions":["Run tests.","Review diff.","Commit changes."]}');
+  await f.command('once');assert.equal(f.requests.length,0);await f.flush();
+  assert.equal(f.requests.length,1);assert.equal(f.requests[0].model,'opus');assert.equal(f.requests[0].effort,'medium');
+  assert.match(f.requests[0].prompt.map(b=>b.text).join(''),/"maxItems":3/);
+  assert.deepEqual(f.suggested,['Run tests.']);assert.deepEqual(f.sent,[]);
+  const tree=await f.emit('ui.render',{component:'AbovePrompt',surface:'terminal'});
+  await tree.props.children[2].props.onSelect('1');assert.equal(f.suggested.at(-1),'Review diff.');
+  assert.equal(await f.$.fs.read('/home/test/.claude/composer-autopilot/config.json'),config);
+  await f.command('status');assert.match(f.logs.at(-1),/^OFF/);assert.match(f.logs.at(-1),/Last: one-shot suggested/);
+  await f.run();assert.equal(f.requests.length,1);
+});
+test('Claude once always suggests in auto mode and may be explicitly repeated on the same turn',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});await f.command('mode auto');await f.command('on');
+  await f.run();assert.equal(f.sent.length,1);
+  for(let i=0;i<2;i++){await f.command('once');await f.flush();}
+  assert.equal(f.requests.length,3);assert.equal(f.suggested.length,2);assert.equal(f.sent.length,1);
+  await f.run();assert.equal(f.requests.length,3); // Automatic source reservation survives manual requests.
+});
+test('Claude once reports abstention, display refusal and API failure, and permits an explicit retry',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});
+  f.response('{"suggestion":null}');await f.command('once');await f.flush();assert.match(f.logs.at(-1),/no grounded/);
+  f.$.model.fork=async()=>({isAnswered:false,reason:'api-error',status:429});
+  await f.command('once');await f.flush();assert.match(f.logs.at(-1),/once failed.*429/);
+  f.$.model.fork=async()=>({text:'{"suggestion":"Try again."}'});
+  f.$.prompt.suggest=async()=>({isShown:false});
+  await f.command('once');await f.flush();assert.match(f.logs.at(-1),/could not display/);
+  f.$.prompt.suggest=async()=>({isShown:true});await f.command('once');await f.flush();assert.match(f.logs.at(-1),/suggestions ready/);
+  assert.deepEqual(f.sent,[]);
+});
+test('Claude once refuses busy/headless sessions and cancels on input, settings, new turns or session end',async()=>{
+  const headless=claudeFixture();await headless.emit('session.start');await headless.command('once');await headless.flush();assert.equal(headless.requests.length,0);
+  const busy=claudeFixture();await busy.emit('session.start',{isInteractive:true});await busy.emit('turn.start',{turnId:'coding'});await busy.command('once');await busy.flush();assert.equal(busy.requests.length,0);assert.match(busy.logs.at(-1),/idle interactive/);
+  for(const change of [f=>f.emit('prompt.edit',{text:'mine'}),f=>f.command('off'),f=>f.command('model opus'),f=>f.emit('turn.start',{turnId:'new'}),f=>f.emit('session.end')]){
+    const f=claudeFixture();await f.emit('session.start',{isInteractive:true});f.during(()=>change(f));await f.command('once');await f.flush();assert.deepEqual(f.suggested,[]);assert.deepEqual(f.sent,[]);
+  }
+});
+test('Claude once reports an in-flight prediction instead of starting another',async()=>{
+  const f=claudeFixture();await f.emit('session.start',{isInteractive:true});
+  let release;f.during(()=>new Promise(resolve=>{release=resolve;}));
+  await f.command('once');const first=f.flush();await waitFor(()=>!!release);
+  await f.command('once');await f.flush();assert.match(f.logs.at(-1),/still running/);assert.equal(f.requests.length,1);
+  release();await first;assert.deepEqual(f.suggested,[]);assert.deepEqual(f.sent,[]);
 });
